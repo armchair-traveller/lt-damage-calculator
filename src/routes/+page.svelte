@@ -87,13 +87,49 @@
 		}
 	] satisfies Array<{ label: string; keys: StatKey[] }>;
 
-	type SummaryComparisonPanel = {
-		id: string;
-		shortLabel: string;
-		buffedIncrease: { avg: string };
+	const COMPARISON_METRICS = [
+		{ id: 'avg', label: 'Avg' },
+		{ id: 'normal', label: 'Normal' },
+		{ id: 'boss', label: 'Boss' }
+	] as const;
+	const SCORE_EPSILON = 0.0000000001;
+	const MIN_DELTA_SCALE = 0.0001;
+
+	type ComparisonMetricId = (typeof COMPARISON_METRICS)[number]['id'];
+	type ComparisonSide = 'a' | 'b';
+	type MetricValues<T> = Record<ComparisonMetricId, T>;
+	type ComparisonRank = {
+		rank: number;
 		isBest: boolean;
 		isTiedBest: boolean;
-		marginLabel: string;
+		margin: number;
+		marginValueLabel: string;
+	};
+	type ComparisonPanelInput = {
+		id: ComparisonSide;
+		label: string;
+		shortLabel: string;
+		buffedDamage: MetricValues<string>;
+		buffedIncrease: MetricValues<string>;
+		rawBuffedIncrease: MetricValues<number>;
+		rawIncrease: number;
+		rawDamage: number;
+	};
+	type RankedComparisonPanel = ComparisonPanelInput & ComparisonRank;
+	type SummaryComparisonPanel = {
+		id: ComparisonSide;
+		shortLabel: string;
+		buffedIncrease: MetricValues<string>;
+		isBest: boolean;
+		isTiedBest: boolean;
+		marginValueLabel: string;
+		margin: number;
+	};
+	type ChangeSummary = {
+		label: string;
+		value: string;
+		detail: string;
+		marginValueLabel: string;
 	};
 
 	let calculator: CalculatorState = $state(createDefaultState());
@@ -126,10 +162,9 @@
 			id: 'a',
 			label: 'Changes A',
 			shortLabel: 'A',
-			damage: report.formatted.a,
-			increase: report.formatted.increaseA,
 			buffedDamage: report.formatted.buffedA,
 			buffedIncrease: report.formatted.buffedIncreaseA,
+			rawBuffedIncrease: report.raw.buffedIncreaseA,
 			rawIncrease: report.raw.buffedIncreaseA.avg,
 			rawDamage: report.raw.buffedA.avg
 		},
@@ -137,16 +172,19 @@
 			id: 'b',
 			label: 'Changes B',
 			shortLabel: 'B',
-			damage: report.formatted.b,
-			increase: report.formatted.increaseB,
 			buffedDamage: report.formatted.buffedB,
 			buffedIncrease: report.formatted.buffedIncreaseB,
+			rawBuffedIncrease: report.raw.buffedIncreaseB,
 			rawIncrease: report.raw.buffedIncreaseB.avg,
 			rawDamage: report.raw.buffedB.avg
 		}
-	]));
-	const bestChangeIds = $derived(new Set(comparisonPanels.filter((panel) => panel.isBest).map((panel) => panel.id)));
+	] satisfies ComparisonPanelInput[]));
 	const changeSummary = $derived(summarizeChangeComparison(comparisonPanels));
+	const comparisonMatrixRows = $derived(buildComparisonMatrixRows(comparisonPanels));
+	const comparisonDeltas = $derived(buildComparisonDeltas(comparisonPanels));
+	const comparisonDeltaScaleMax = $derived(
+		Math.max(MIN_DELTA_SCALE, ...comparisonDeltas.map((delta) => Math.abs(delta.value)))
+	);
 	const damageScaleMax = $derived(
 		Math.max(
 			report.raw.base.avg,
@@ -161,29 +199,25 @@
 			id: 'base',
 			label: 'Base',
 			value: report.raw.base.avg,
-			formatted: report.formatted.base.avg,
-			isBestChange: false
+			formatted: report.formatted.base.avg
 		},
 		{
 			id: 'buffed',
 			label: 'Buffed',
 			value: report.raw.buffed.avg,
-			formatted: report.formatted.buffed.avg,
-			isBestChange: false
+			formatted: report.formatted.buffed.avg
 		},
 		{
 			id: 'a',
 			label: 'A Buffed',
 			value: report.raw.buffedA.avg,
-			formatted: report.formatted.buffedA.avg,
-			isBestChange: bestChangeIds.has('a')
+			formatted: report.formatted.buffedA.avg
 		},
 		{
 			id: 'b',
 			label: 'B Buffed',
 			value: report.raw.buffedB.avg,
-			formatted: report.formatted.buffedB.avg,
-			isBestChange: bestChangeIds.has('b')
+			formatted: report.formatted.buffedB.avg
 		}
 	]);
 
@@ -276,6 +310,8 @@
 
 	function toneClass(value: string | undefined) {
 		const tone = signedTone(value ?? '');
+		const numericValue = tone === 'neutral' ? Number.NaN : Number((value ?? '').replace(/[^0-9.-]/g, ''));
+		if (Number.isFinite(numericValue) && numericValue === 0) return 'text-muted-foreground';
 		return tone === 'positive'
 			? 'text-emerald-700 dark:text-emerald-300'
 			: tone === 'negative'
@@ -309,8 +345,13 @@
 
 	function formatPointDelta(value: number) {
 		if (!Number.isFinite(value)) return '---';
+		return `${formatPointDeltaValue(value)} pp`;
+	}
+
+	function formatPointDeltaValue(value: number) {
+		if (!Number.isFinite(value)) return '---';
 		const sign = value > 0 ? '+' : '';
-		return `${sign}${(value * 100).toFixed(5)} pp`;
+		return `${sign}${(value * 100).toFixed(5)}`;
 	}
 
 	function sortableScore(value: number) {
@@ -319,7 +360,7 @@
 		return Number.isFinite(value) ? value : Number.MIN_SAFE_INTEGER;
 	}
 
-	function rankComparisonPanels<T extends { rawIncrease: number; rawDamage: number }>(panels: T[]) {
+	function rankComparisonPanels<T extends { rawIncrease: number; rawDamage: number }>(panels: T[]): Array<T & ComparisonRank> {
 		const sorted = [...panels].sort(
 			(a, b) =>
 				sortableScore(b.rawIncrease) - sortableScore(a.rawIncrease) ||
@@ -329,14 +370,14 @@
 		const runnerUp = sorted[1];
 		const bestScore = sortableScore(leader?.rawIncrease ?? Number.NaN);
 		const runnerUpScore = sortableScore(runnerUp?.rawIncrease ?? Number.NaN);
-		const isTie = runnerUp ? Math.abs(bestScore - runnerUpScore) < 0.0000000001 : false;
+		const isTie = runnerUp ? Math.abs(bestScore - runnerUpScore) < SCORE_EPSILON : false;
 
 		return panels.map((panel) => {
 			const rank = sorted.findIndex((candidate) => candidate === panel) + 1;
 			const panelScore = sortableScore(panel.rawIncrease);
 			const isLeader = panel === leader;
 			const isBest = isLeader && !isTie;
-			const isTiedBest = isTie && Math.abs(panelScore - bestScore) < 0.0000000001;
+			const isTiedBest = isTie && Math.abs(panelScore - bestScore) < SCORE_EPSILON;
 			const comparisonTarget = isLeader ? runnerUp : leader;
 			const margin =
 				comparisonTarget && Number.isFinite(panel.rawIncrease) && Number.isFinite(comparisonTarget.rawIncrease)
@@ -349,12 +390,12 @@
 				isBest,
 				isTiedBest,
 				margin,
-				marginLabel: formatPointDelta(margin)
+				marginValueLabel: formatPointDeltaValue(margin)
 			};
 		});
 	}
 
-	function summarizeChangeComparison(panels: SummaryComparisonPanel[]) {
+	function summarizeChangeComparison(panels: SummaryComparisonPanel[]): ChangeSummary | undefined {
 		const leaders = panels.filter((panel) => panel.isBest || panel.isTiedBest);
 		const leader = leaders[0];
 		if (!leader) return undefined;
@@ -362,7 +403,8 @@
 			return {
 				label: 'A/B tied',
 				value: leader.buffedIncrease.avg,
-				detail: 'Same average buffed gain'
+				detail: 'Same average buffed gain',
+				marginValueLabel: ''
 			};
 		}
 
@@ -370,8 +412,76 @@
 		return {
 			label: `${leader.shortLabel} best`,
 			value: leader.buffedIncrease.avg,
-			detail: other ? `${leader.shortLabel} leads ${other.shortLabel} by ${leader.marginLabel}` : ''
+			detail: other ? `${leader.shortLabel} leads ${other.shortLabel} by` : '',
+			marginValueLabel: other ? leader.marginValueLabel : ''
 		};
+	}
+
+	function metricWinner(
+		panels: RankedComparisonPanel[],
+		metric: ComparisonMetricId
+	): ComparisonSide | 'tie' | undefined {
+		const a = panels.find((panel) => panel.id === 'a');
+		const b = panels.find((panel) => panel.id === 'b');
+		if (!a || !b) return undefined;
+		const delta = sortableScore(a.rawBuffedIncrease[metric]) - sortableScore(b.rawBuffedIncrease[metric]);
+		if (Math.abs(delta) < SCORE_EPSILON) return 'tie';
+		return delta > 0 ? 'a' : 'b';
+	}
+
+	function buildComparisonMatrixRows(panels: RankedComparisonPanel[]) {
+		return panels.map((panel) => ({
+			id: panel.id,
+			label: panel.shortLabel,
+			metrics: COMPARISON_METRICS.map((metric) => {
+				const winner = metricWinner(panels, metric.id);
+				return {
+					id: metric.id,
+					label: metric.label,
+					gain: panel.buffedIncrease[metric.id],
+					damage: panel.buffedDamage[metric.id],
+					isWinner: winner === panel.id
+				};
+			})
+		}));
+	}
+
+	function buildComparisonDeltas(panels: RankedComparisonPanel[]) {
+		const a = panels.find((panel) => panel.id === 'a');
+		const b = panels.find((panel) => panel.id === 'b');
+		if (!a || !b) return [];
+
+		return COMPARISON_METRICS.map((metric) => {
+			const value = a.rawBuffedIncrease[metric.id] - b.rawBuffedIncrease[metric.id];
+			return {
+				id: metric.id,
+				label: metric.label,
+				value,
+				valueLabel: formatPointDelta(value)
+			};
+		});
+	}
+
+	function metricCellClass(isWinner: boolean) {
+		return isWinner
+			? 'border-chart-2/60 bg-chart-2/10'
+			: 'border-border/70 bg-background/55';
+	}
+
+	function deltaToneClass(value: number) {
+		if (!Number.isFinite(value) || Math.abs(value) < SCORE_EPSILON) return 'text-muted-foreground';
+		return value > 0 ? 'text-chart-2' : 'text-chart-4';
+	}
+
+	function deltaBarClass(value: number) {
+		if (!Number.isFinite(value) || Math.abs(value) < SCORE_EPSILON) return 'bg-muted-foreground/50';
+		return value > 0 ? 'bg-chart-2' : 'bg-chart-4';
+	}
+
+	function deltaBarStyle(value: number, max: number) {
+		if (!Number.isFinite(value) || Math.abs(value) < SCORE_EPSILON || max <= 0) return 'left: 50%; width: 0%;';
+		const width = Math.min(50, (Math.abs(value) / max) * 50).toFixed(2);
+		return value > 0 ? `left: 50%; width: ${width}%;` : `right: 50%; width: ${width}%;`;
 	}
 
 	function barWidth(value: number, max: number) {
@@ -455,7 +565,6 @@
 						</Badge>
 						{#if changeSummary}
 							<Badge variant="outline" class="border-chart-2/60 bg-chart-2/10">
-								<TrophyIcon data-icon="inline-start" />
 								{changeSummary.label} {changeSummary.value}
 							</Badge>
 						{/if}
@@ -548,20 +657,8 @@
 				<Tabs.Tabs bind:value={mobileStatsTab}>
 					<Tabs.List class="m-3 grid w-[calc(100%-1.5rem)] grid-cols-3">
 						<Tabs.Trigger value="base">Base</Tabs.Trigger>
-						<Tabs.Trigger value="a">
-							A
-							{#if bestChangeIds.has('a')}
-								<TrophyIcon class="size-3 text-chart-2" />
-								<span class="sr-only">best</span>
-							{/if}
-						</Tabs.Trigger>
-						<Tabs.Trigger value="b">
-							B
-							{#if bestChangeIds.has('b')}
-								<TrophyIcon class="size-3 text-chart-2" />
-								<span class="sr-only">best</span>
-							{/if}
-						</Tabs.Trigger>
+						<Tabs.Trigger value="a">A</Tabs.Trigger>
+						<Tabs.Trigger value="b">B</Tabs.Trigger>
 					</Tabs.List>
 					<Tabs.Content value="base">
 						{@render mobileStatsPanel('mobile-base', calculator.stats)}
@@ -583,34 +680,10 @@
 						<div class="px-3 py-2">Stat</div>
 						<div class="px-2 py-2 text-right">Base</div>
 						<div class="px-2 py-2 text-right">Base %</div>
-						<div class="flex items-center justify-end gap-1 px-2 py-2">
-							{#if bestChangeIds.has('a')}
-								<TrophyIcon class="size-3 text-chart-2" />
-								<span class="sr-only">best</span>
-							{/if}
-							<span>A Flat</span>
-						</div>
-						<div class="flex items-center justify-end gap-1 px-2 py-2">
-							{#if bestChangeIds.has('a')}
-								<TrophyIcon class="size-3 text-chart-2" />
-								<span class="sr-only">best</span>
-							{/if}
-							<span>A %</span>
-						</div>
-						<div class="flex items-center justify-end gap-1 px-2 py-2">
-							{#if bestChangeIds.has('b')}
-								<TrophyIcon class="size-3 text-chart-2" />
-								<span class="sr-only">best</span>
-							{/if}
-							<span>B Flat</span>
-						</div>
-						<div class="flex items-center justify-end gap-1 px-2 py-2">
-							{#if bestChangeIds.has('b')}
-								<TrophyIcon class="size-3 text-chart-2" />
-								<span class="sr-only">best</span>
-							{/if}
-							<span>B %</span>
-						</div>
+						<div class="px-2 py-2 text-right">A Flat</div>
+						<div class="px-2 py-2 text-right">A %</div>
+						<div class="px-2 py-2 text-right">B Flat</div>
+						<div class="px-2 py-2 text-right">B %</div>
 					</div>
 
 					{#each STAT_GROUPS as group}
@@ -661,95 +734,154 @@
 					</div>
 					<Badge variant="outline">{report.formatted.base.avg}</Badge>
 				</div>
-				<div class="space-y-4 p-4">
-					<div class="grid grid-cols-2 gap-x-4 gap-y-3">
-						{@render valueBlock('Normal', report.formatted.base.normal)}
-						{@render valueBlock('Boss', report.formatted.base.boss)}
-						{@render valueBlock('Buffed Normal', report.formatted.buffed.normal)}
-						{@render valueBlock('Buffed Boss', report.formatted.buffed.boss)}
-					</div>
-
-					<div class="space-y-2 border-t border-border/80 pt-4">
+				<Tooltip.Provider delayDuration={120}>
+					<div class="space-y-4 p-4">
 						{#if changeSummary}
-							<div class="space-y-1 pb-2">
-								<div class="flex items-center justify-between gap-3 text-xs">
-									<span class="flex min-w-0 items-center gap-1.5 font-semibold">
-										<TrophyIcon class="size-3.5 text-chart-2" />
-										<span>{changeSummary.label}</span>
+							<div class="rounded-md border border-chart-2/50 bg-chart-2/10 p-3">
+								<div class="flex items-start justify-between gap-3">
+									<div class="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
+										<TrophyIcon class="size-3.5 shrink-0 text-chart-2" />
+										<span class="truncate">{changeSummary.label}</span>
+									</div>
+									<span class={`${activeTone(changeSummary.value)} shrink-0 text-sm`}>
+										{changeSummary.value}
 									</span>
-									<span class={activeTone(changeSummary.value)}>{changeSummary.value}</span>
 								</div>
-								<div class="truncate text-[11px] text-muted-foreground">{changeSummary.detail}</div>
+								<div class="mt-1 flex min-w-0 flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+									<span class="truncate">{changeSummary.detail}</span>
+									{#if changeSummary.marginValueLabel}
+										<span class="inline-flex items-center gap-1 tabular-nums">
+											<span>{changeSummary.marginValueLabel}</span>
+											<Tooltip.Root>
+												<Tooltip.Trigger>
+													{#snippet child({ props })}
+														<button
+															{...props}
+															type="button"
+															class="cursor-help border-b border-dotted border-current leading-none"
+														>
+															pp
+														</button>
+													{/snippet}
+												</Tooltip.Trigger>
+												<Tooltip.Content side="top" sideOffset={6}>Percentage points</Tooltip.Content>
+											</Tooltip.Root>
+										</span>
+									{/if}
+								</div>
 							</div>
 						{/if}
-						<div class="flex items-center justify-between text-xs text-muted-foreground">
-							<span>Buff Gain</span>
-							<span class={activeTone(report.formatted.buffIncrease.avg)}>
-								{report.formatted.buffIncrease.avg}
-							</span>
-						</div>
-						{#each damageBars as bar}
-							<div class="grid grid-cols-[5.25rem_minmax(0,1fr)_4.75rem] items-center gap-2 text-xs">
-								<span class="flex min-w-0 items-center gap-1 text-muted-foreground">
-									{#if bar.isBestChange}
-										<TrophyIcon class="size-3 shrink-0 text-chart-2" />
-									{/if}
-									<span class="truncate">{bar.label}</span>
-								</span>
-								<div class="h-2 overflow-hidden rounded-sm bg-muted">
-									<div
-										class="h-full rounded-sm"
-										class:bg-chart-3={bar.id === 'base'}
-										class:bg-chart-1={bar.id === 'buffed'}
-										class:bg-chart-2={bar.id === 'a'}
-										class:bg-chart-4={bar.id === 'b'}
-										style={`width: ${barWidth(bar.value, damageScaleMax)}`}
-									></div>
-								</div>
-								<span class="text-right font-medium tabular-nums">{bar.formatted}</span>
-							</div>
-						{/each}
-					</div>
 
-					<div class="space-y-3 border-t border-border/80 pt-4">
-						{#each comparisonPanels as panel}
-							<div
-								class={`space-y-2 border-l-2 pl-3 ${panel.isBest || panel.isTiedBest ? 'border-chart-2' : 'border-border/70'}`}
-							>
-								<div class="flex items-center justify-between gap-2">
-									<span class="text-xs font-semibold">{panel.label}</span>
-									<div class="flex items-center gap-2">
-										{#if panel.isBest}
-											<Badge variant="secondary" class="bg-chart-2/15 text-foreground">
-												<TrophyIcon data-icon="inline-start" />
-												Best
-											</Badge>
-										{:else if panel.isTiedBest}
-											<Badge variant="outline">Tie</Badge>
-										{:else}
-											<Badge variant="outline">#{panel.rank}</Badge>
-										{/if}
-										<span class={activeTone(panel.buffedIncrease.avg)}>{panel.buffedIncrease.avg}</span>
+						<div class="grid grid-cols-2 gap-x-4 gap-y-3">
+							{@render valueBlock('Normal', report.formatted.base.normal)}
+							{@render valueBlock('Boss', report.formatted.base.boss)}
+							{@render valueBlock('Buffed Normal', report.formatted.buffed.normal)}
+							{@render valueBlock('Buffed Boss', report.formatted.buffed.boss)}
+						</div>
+
+						<div class="space-y-2 border-t border-border/80 pt-4">
+							<div class="flex items-center justify-between gap-3">
+								<div class="text-xs font-semibold">A/B comparison</div>
+								<div class="text-[11px] text-muted-foreground">Buffed gain</div>
+							</div>
+							<div class="grid grid-cols-[1.75rem_repeat(3,minmax(0,1fr))] gap-1 sm:grid-cols-[2.25rem_repeat(3,minmax(0,1fr))] sm:gap-1.5">
+								<div></div>
+								{#each COMPARISON_METRICS as metric}
+									<div class="px-0.5 text-center text-[11px] font-medium text-muted-foreground">
+										{metric.label}
 									</div>
-								</div>
-								<div class="truncate text-[11px] text-muted-foreground">
-									{#if panel.isBest && panel.margin > 0}
-										Leads by {panel.marginLabel}
-									{:else if panel.isTiedBest}
-										Same average buffed gain
-									{:else}
-										{panel.marginLabel} behind best
-									{/if}
-								</div>
-								<div class="grid grid-cols-3 gap-2 text-xs">
-									{@render miniMetric('Normal', panel.increase.normal, panel.damage.normal)}
-									{@render miniMetric('Boss', panel.increase.boss, panel.damage.boss)}
-									{@render miniMetric('Buffed', panel.buffedIncrease.avg, panel.buffedDamage.avg)}
+								{/each}
+								{#each comparisonMatrixRows as row}
+									<div class="grid place-items-center">
+										<Badge
+											variant="outline"
+											class={row.id === 'a'
+												? 'border-chart-2/50 bg-chart-2/10 px-1.5 text-foreground'
+												: 'border-chart-4/50 bg-chart-4/10 px-1.5 text-foreground'}
+										>
+											{row.label}
+										</Badge>
+									</div>
+									{#each row.metrics as cell}
+										<div
+											class={`min-w-0 rounded-md border px-1 py-1.5 text-center sm:px-2 ${metricCellClass(cell.isWinner)}`}
+										>
+											<div class={`${activeTone(cell.gain)} truncate text-[10px] leading-3 sm:text-xs sm:leading-4`}>
+												{cell.gain}
+											</div>
+											<div class="truncate text-[9px] leading-3 text-muted-foreground tabular-nums sm:text-[10px]">
+												{cell.damage}
+											</div>
+										</div>
+									{/each}
+								{/each}
+							</div>
+						</div>
+
+						<div class="space-y-2 border-t border-border/80 pt-4">
+							<div class="flex items-center justify-between gap-3">
+								<div class="text-xs font-semibold">A vs B delta</div>
+								<div class="flex items-center gap-1 text-[11px] text-muted-foreground">
+									<span>A - B</span>
+									<Tooltip.Root>
+										<Tooltip.Trigger>
+											{#snippet child({ props })}
+												<button
+													{...props}
+													type="button"
+													class="cursor-help border-b border-dotted border-current leading-none"
+												>
+													pp
+												</button>
+											{/snippet}
+										</Tooltip.Trigger>
+										<Tooltip.Content side="top" sideOffset={6}>Percentage points</Tooltip.Content>
+									</Tooltip.Root>
 								</div>
 							</div>
-						{/each}
+							{#each comparisonDeltas as delta}
+								<div class="grid grid-cols-[3.25rem_minmax(0,1fr)_5.75rem] items-center gap-2 text-xs">
+									<span class="truncate text-muted-foreground">{delta.label}</span>
+									<div class="relative h-4 overflow-hidden rounded-sm bg-muted/70">
+										<div class="absolute left-1/2 top-0 h-full w-px bg-border"></div>
+										<div
+											class={`absolute top-1/2 h-2 -translate-y-1/2 rounded-sm ${deltaBarClass(delta.value)}`}
+											style={deltaBarStyle(delta.value, comparisonDeltaScaleMax)}
+										></div>
+									</div>
+									<span class={`${deltaToneClass(delta.value)} text-right font-medium tabular-nums`}>
+										{delta.valueLabel}
+									</span>
+								</div>
+							{/each}
+						</div>
+
+						<div class="space-y-2 border-t border-border/80 pt-4">
+							<div class="flex items-center justify-between text-xs">
+								<span class="font-semibold">Damage totals</span>
+								<span class={activeTone(report.formatted.buffIncrease.avg)}>
+									{report.formatted.buffIncrease.avg}
+								</span>
+							</div>
+							{#each damageBars as bar}
+								<div class="grid grid-cols-[4.75rem_minmax(0,1fr)_4.75rem] items-center gap-2 text-xs">
+									<span class="truncate text-muted-foreground">{bar.label}</span>
+									<div class="h-1.5 overflow-hidden rounded-sm bg-muted/70">
+										<div
+											class="h-full rounded-sm opacity-85"
+											class:bg-chart-3={bar.id === 'base'}
+											class:bg-chart-1={bar.id === 'buffed'}
+											class:bg-chart-2={bar.id === 'a'}
+											class:bg-chart-4={bar.id === 'b'}
+											style={`width: ${barWidth(bar.value, damageScaleMax)}`}
+										></div>
+									</div>
+									<span class="text-right font-medium tabular-nums">{bar.formatted}</span>
+								</div>
+							{/each}
+						</div>
 					</div>
-				</div>
+				</Tooltip.Provider>
 			</section>
 
 			<section id="parameters" class="rounded-lg border border-border bg-card shadow-sm">
@@ -1083,14 +1215,6 @@
 	<div class="min-w-0">
 		<div class="text-xs text-muted-foreground">{label}</div>
 		<div class="mt-1 truncate text-base font-semibold tabular-nums">{value}</div>
-	</div>
-{/snippet}
-
-{#snippet miniMetric(label: string, increase: string, damage: string)}
-	<div class="min-w-0">
-		<div class="truncate text-[11px] text-muted-foreground">{label}</div>
-		<div class={`${activeTone(increase)} truncate text-xs`}>{increase}</div>
-		<div class="truncate text-[11px] text-muted-foreground tabular-nums">{damage}</div>
 	</div>
 {/snippet}
 
