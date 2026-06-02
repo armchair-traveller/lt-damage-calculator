@@ -17,6 +17,7 @@
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import TargetIcon from '@lucide/svelte/icons/target';
+	import TrophyIcon from '@lucide/svelte/icons/trophy';
 	import UploadIcon from '@lucide/svelte/icons/upload';
 	import WandSparklesIcon from '@lucide/svelte/icons/wand-sparkles';
 	import { Badge } from '$lib/components/ui/badge/index.js';
@@ -86,6 +87,15 @@
 		}
 	] satisfies Array<{ label: string; keys: StatKey[] }>;
 
+	type SummaryComparisonPanel = {
+		id: string;
+		shortLabel: string;
+		buffedIncrease: { avg: string };
+		isBest: boolean;
+		isTiedBest: boolean;
+		marginLabel: string;
+	};
+
 	let calculator: CalculatorState = $state(createDefaultState());
 	let hydrated = $state(false);
 	let selectedPreset = $state('Hero (Greatsword)');
@@ -111,6 +121,32 @@
 			percent: report.buffStats[key][1]
 		})).filter((row) => row.flat !== 0 || row.percent !== 0)
 	);
+	const comparisonPanels = $derived(rankComparisonPanels([
+		{
+			id: 'a',
+			label: 'Changes A',
+			shortLabel: 'A',
+			damage: report.formatted.a,
+			increase: report.formatted.increaseA,
+			buffedDamage: report.formatted.buffedA,
+			buffedIncrease: report.formatted.buffedIncreaseA,
+			rawIncrease: report.raw.buffedIncreaseA.avg,
+			rawDamage: report.raw.buffedA.avg
+		},
+		{
+			id: 'b',
+			label: 'Changes B',
+			shortLabel: 'B',
+			damage: report.formatted.b,
+			increase: report.formatted.increaseB,
+			buffedDamage: report.formatted.buffedB,
+			buffedIncrease: report.formatted.buffedIncreaseB,
+			rawIncrease: report.raw.buffedIncreaseB.avg,
+			rawDamage: report.raw.buffedB.avg
+		}
+	]));
+	const bestChangeIds = $derived(new Set(comparisonPanels.filter((panel) => panel.isBest).map((panel) => panel.id)));
+	const changeSummary = $derived(summarizeChangeComparison(comparisonPanels));
 	const damageScaleMax = $derived(
 		Math.max(
 			report.raw.base.avg,
@@ -125,43 +161,29 @@
 			id: 'base',
 			label: 'Base',
 			value: report.raw.base.avg,
-			formatted: report.formatted.base.avg
+			formatted: report.formatted.base.avg,
+			isBestChange: false
 		},
 		{
 			id: 'buffed',
 			label: 'Buffed',
 			value: report.raw.buffed.avg,
-			formatted: report.formatted.buffed.avg
+			formatted: report.formatted.buffed.avg,
+			isBestChange: false
 		},
 		{
 			id: 'a',
 			label: 'A Buffed',
 			value: report.raw.buffedA.avg,
-			formatted: report.formatted.buffedA.avg
+			formatted: report.formatted.buffedA.avg,
+			isBestChange: bestChangeIds.has('a')
 		},
 		{
 			id: 'b',
 			label: 'B Buffed',
 			value: report.raw.buffedB.avg,
-			formatted: report.formatted.buffedB.avg
-		}
-	]);
-	const comparisonPanels = $derived([
-		{
-			id: 'a',
-			label: 'Changes A',
-			damage: report.formatted.a,
-			increase: report.formatted.increaseA,
-			buffedDamage: report.formatted.buffedA,
-			buffedIncrease: report.formatted.buffedIncreaseA
-		},
-		{
-			id: 'b',
-			label: 'Changes B',
-			damage: report.formatted.b,
-			increase: report.formatted.increaseB,
-			buffedDamage: report.formatted.buffedB,
-			buffedIncrease: report.formatted.buffedIncreaseB
+			formatted: report.formatted.buffedB.avg,
+			isBestChange: bestChangeIds.has('b')
 		}
 	]);
 
@@ -285,6 +307,73 @@
 		return parts.join(' / ');
 	}
 
+	function formatPointDelta(value: number) {
+		if (!Number.isFinite(value)) return '---';
+		const sign = value > 0 ? '+' : '';
+		return `${sign}${(value * 100).toFixed(5)} pp`;
+	}
+
+	function sortableScore(value: number) {
+		if (value === Infinity) return Number.MAX_SAFE_INTEGER;
+		if (value === -Infinity) return Number.MIN_SAFE_INTEGER;
+		return Number.isFinite(value) ? value : Number.MIN_SAFE_INTEGER;
+	}
+
+	function rankComparisonPanels<T extends { rawIncrease: number; rawDamage: number }>(panels: T[]) {
+		const sorted = [...panels].sort(
+			(a, b) =>
+				sortableScore(b.rawIncrease) - sortableScore(a.rawIncrease) ||
+				sortableScore(b.rawDamage) - sortableScore(a.rawDamage)
+		);
+		const leader = sorted[0];
+		const runnerUp = sorted[1];
+		const bestScore = sortableScore(leader?.rawIncrease ?? Number.NaN);
+		const runnerUpScore = sortableScore(runnerUp?.rawIncrease ?? Number.NaN);
+		const isTie = runnerUp ? Math.abs(bestScore - runnerUpScore) < 0.0000000001 : false;
+
+		return panels.map((panel) => {
+			const rank = sorted.findIndex((candidate) => candidate === panel) + 1;
+			const panelScore = sortableScore(panel.rawIncrease);
+			const isLeader = panel === leader;
+			const isBest = isLeader && !isTie;
+			const isTiedBest = isTie && Math.abs(panelScore - bestScore) < 0.0000000001;
+			const comparisonTarget = isLeader ? runnerUp : leader;
+			const margin =
+				comparisonTarget && Number.isFinite(panel.rawIncrease) && Number.isFinite(comparisonTarget.rawIncrease)
+					? Math.abs(panel.rawIncrease - comparisonTarget.rawIncrease)
+					: Number.NaN;
+
+			return {
+				...panel,
+				rank,
+				isBest,
+				isTiedBest,
+				margin,
+				marginLabel: formatPointDelta(margin)
+			};
+		});
+	}
+
+	function summarizeChangeComparison(panels: SummaryComparisonPanel[]) {
+		const leaders = panels.filter((panel) => panel.isBest || panel.isTiedBest);
+		const leader = leaders[0];
+		if (!leader) return undefined;
+		if (leaders.length > 1) {
+			return {
+				label: 'A/B tied',
+				value: leader.buffedIncrease.avg,
+				detail: 'Same average buffed gain'
+			};
+		}
+
+		const other = panels.find((panel) => panel.id !== leader.id);
+		return {
+			label: `${leader.shortLabel} best`,
+			value: leader.buffedIncrease.avg,
+			detail: other ? `${leader.shortLabel} leads ${other.shortLabel} by ${leader.marginLabel}` : ''
+		};
+	}
+
 	function barWidth(value: number, max: number) {
 		if (!Number.isFinite(value) || max <= 0) return '0%';
 		return `${Math.max(4, Math.min(100, (value / max) * 100)).toFixed(2)}%`;
@@ -364,6 +453,12 @@
 							<SparklesIcon data-icon="inline-start" />
 							{report.formatted.buffIncrease.avg}
 						</Badge>
+						{#if changeSummary}
+							<Badge variant="outline" class="border-chart-2/60 bg-chart-2/10">
+								<TrophyIcon data-icon="inline-start" />
+								{changeSummary.label} {changeSummary.value}
+							</Badge>
+						{/if}
 
 						<ThemeToggle />
 						<Tooltip.Root>
@@ -453,8 +548,20 @@
 				<Tabs.Tabs bind:value={mobileStatsTab}>
 					<Tabs.List class="m-3 grid w-[calc(100%-1.5rem)] grid-cols-3">
 						<Tabs.Trigger value="base">Base</Tabs.Trigger>
-						<Tabs.Trigger value="a">A</Tabs.Trigger>
-						<Tabs.Trigger value="b">B</Tabs.Trigger>
+						<Tabs.Trigger value="a">
+							A
+							{#if bestChangeIds.has('a')}
+								<TrophyIcon class="size-3 text-chart-2" />
+								<span class="sr-only">best</span>
+							{/if}
+						</Tabs.Trigger>
+						<Tabs.Trigger value="b">
+							B
+							{#if bestChangeIds.has('b')}
+								<TrophyIcon class="size-3 text-chart-2" />
+								<span class="sr-only">best</span>
+							{/if}
+						</Tabs.Trigger>
 					</Tabs.List>
 					<Tabs.Content value="base">
 						{@render mobileStatsPanel('mobile-base', calculator.stats)}
@@ -476,10 +583,34 @@
 						<div class="px-3 py-2">Stat</div>
 						<div class="px-2 py-2 text-right">Base</div>
 						<div class="px-2 py-2 text-right">Base %</div>
-						<div class="px-2 py-2 text-right">A Flat</div>
-						<div class="px-2 py-2 text-right">A %</div>
-						<div class="px-2 py-2 text-right">B Flat</div>
-						<div class="px-2 py-2 text-right">B %</div>
+						<div class="flex items-center justify-end gap-1 px-2 py-2">
+							{#if bestChangeIds.has('a')}
+								<TrophyIcon class="size-3 text-chart-2" />
+								<span class="sr-only">best</span>
+							{/if}
+							<span>A Flat</span>
+						</div>
+						<div class="flex items-center justify-end gap-1 px-2 py-2">
+							{#if bestChangeIds.has('a')}
+								<TrophyIcon class="size-3 text-chart-2" />
+								<span class="sr-only">best</span>
+							{/if}
+							<span>A %</span>
+						</div>
+						<div class="flex items-center justify-end gap-1 px-2 py-2">
+							{#if bestChangeIds.has('b')}
+								<TrophyIcon class="size-3 text-chart-2" />
+								<span class="sr-only">best</span>
+							{/if}
+							<span>B Flat</span>
+						</div>
+						<div class="flex items-center justify-end gap-1 px-2 py-2">
+							{#if bestChangeIds.has('b')}
+								<TrophyIcon class="size-3 text-chart-2" />
+								<span class="sr-only">best</span>
+							{/if}
+							<span>B %</span>
+						</div>
 					</div>
 
 					{#each STAT_GROUPS as group}
@@ -539,6 +670,18 @@
 					</div>
 
 					<div class="space-y-2 border-t border-border/80 pt-4">
+						{#if changeSummary}
+							<div class="space-y-1 pb-2">
+								<div class="flex items-center justify-between gap-3 text-xs">
+									<span class="flex min-w-0 items-center gap-1.5 font-semibold">
+										<TrophyIcon class="size-3.5 text-chart-2" />
+										<span>{changeSummary.label}</span>
+									</span>
+									<span class={activeTone(changeSummary.value)}>{changeSummary.value}</span>
+								</div>
+								<div class="truncate text-[11px] text-muted-foreground">{changeSummary.detail}</div>
+							</div>
+						{/if}
 						<div class="flex items-center justify-between text-xs text-muted-foreground">
 							<span>Buff Gain</span>
 							<span class={activeTone(report.formatted.buffIncrease.avg)}>
@@ -547,7 +690,12 @@
 						</div>
 						{#each damageBars as bar}
 							<div class="grid grid-cols-[5.25rem_minmax(0,1fr)_4.75rem] items-center gap-2 text-xs">
-								<span class="text-muted-foreground">{bar.label}</span>
+								<span class="flex min-w-0 items-center gap-1 text-muted-foreground">
+									{#if bar.isBestChange}
+										<TrophyIcon class="size-3 shrink-0 text-chart-2" />
+									{/if}
+									<span class="truncate">{bar.label}</span>
+								</span>
 								<div class="h-2 overflow-hidden rounded-sm bg-muted">
 									<div
 										class="h-full rounded-sm"
@@ -565,10 +713,33 @@
 
 					<div class="space-y-3 border-t border-border/80 pt-4">
 						{#each comparisonPanels as panel}
-							<div class="space-y-2">
+							<div
+								class={`space-y-2 border-l-2 pl-3 ${panel.isBest || panel.isTiedBest ? 'border-chart-2' : 'border-border/70'}`}
+							>
 								<div class="flex items-center justify-between gap-2">
 									<span class="text-xs font-semibold">{panel.label}</span>
-									<span class={activeTone(panel.buffedIncrease.avg)}>{panel.buffedIncrease.avg}</span>
+									<div class="flex items-center gap-2">
+										{#if panel.isBest}
+											<Badge variant="secondary" class="bg-chart-2/15 text-foreground">
+												<TrophyIcon data-icon="inline-start" />
+												Best
+											</Badge>
+										{:else if panel.isTiedBest}
+											<Badge variant="outline">Tie</Badge>
+										{:else}
+											<Badge variant="outline">#{panel.rank}</Badge>
+										{/if}
+										<span class={activeTone(panel.buffedIncrease.avg)}>{panel.buffedIncrease.avg}</span>
+									</div>
+								</div>
+								<div class="truncate text-[11px] text-muted-foreground">
+									{#if panel.isBest && panel.margin > 0}
+										Leads by {panel.marginLabel}
+									{:else if panel.isTiedBest}
+										Same average buffed gain
+									{:else}
+										{panel.marginLabel} behind best
+									{/if}
 								</div>
 								<div class="grid grid-cols-3 gap-2 text-xs">
 									{@render miniMetric('Normal', panel.increase.normal, panel.damage.normal)}
