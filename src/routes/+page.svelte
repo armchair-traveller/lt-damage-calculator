@@ -1029,8 +1029,9 @@
 	<div class="border-b border-l border-border/70 p-1">
 		<Input
 			id={`${panelId}-${key}-${index === 0 ? 'flat' : 'percent'}`}
-			type="text"
+			type="number"
 			inputmode="decimal"
+			step="any"
 			value={stats[key][index]}
 			aria-label={`${panelId} ${STAT_LABELS[key]} ${index === 0 ? 'flat' : 'percent'}`}
 			class="h-8 border-transparent bg-transparent px-2 text-right text-xs tabular-nums hover:bg-input/70 focus-visible:bg-background"
