@@ -136,6 +136,15 @@
 	textarea {
 		font: inherit;
 	}
+	input[type='number'] {
+		appearance: textfield;
+		-moz-appearance: textfield;
+	}
+	input[type='number']::-webkit-inner-spin-button,
+	input[type='number']::-webkit-outer-spin-button {
+		-webkit-appearance: none;
+		margin: 0;
+	}
 	::selection {
 		@apply bg-cyan-200 text-zinc-950;
 	}
