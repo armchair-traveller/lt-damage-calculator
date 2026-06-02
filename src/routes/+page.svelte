@@ -26,6 +26,7 @@
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import ThemeToggle from '$lib/components/theme-toggle.svelte';
 	import {
 		applyClassPreset,
 		applyQuickPreset,
@@ -244,6 +245,7 @@
 						Buffed {report.formatted.buffIncrease.avg}
 					</Badge>
 
+					<ThemeToggle />
 					<Button
 						variant="outline"
 						size="icon"

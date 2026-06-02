@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ModeWatcher } from 'mode-watcher';
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.ico';
 
@@ -6,4 +7,5 @@
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
+<ModeWatcher />
 {@render children()}
