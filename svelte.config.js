@@ -7,12 +7,7 @@ const config = {
 		runes: ({ filename }) => filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 	},
 	kit: {
-		adapter: adapter({
-			fallback: 'index.html'
-		}),
-		paths: {
-			base: process.env.NODE_ENV === 'production' ? '/lt-damage-calculator' : ''
-		}
+		adapter: adapter()
 	}
 };
 
