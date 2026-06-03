@@ -1676,6 +1676,7 @@
 			id={inputId}
 			type="text"
 			inputmode="decimal"
+			autocomplete="off"
 			value={state.draftValue}
 			aria-label={`${panelLabel(toneId)} ${STAT_LABELS[key]} ${index === 0 ? 'flat' : 'percent'}`}
 			aria-invalid={state.invalid}
