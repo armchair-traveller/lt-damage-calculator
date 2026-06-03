@@ -151,11 +151,13 @@
 	type WorkbenchInputState = {
 		cleaned: string;
 		displayValue: string;
+		draftValue: string;
 		filled: boolean;
 		focused: boolean;
 		hasContent: boolean;
 		invalid: boolean;
 		numericValue: number;
+		showDisplayOverlay: boolean;
 		showPercentSuffix: boolean;
 	};
 	type WorkbenchCellImpact = {
@@ -178,6 +180,7 @@
 	let equivalenceTab = $state('damage');
 	let mobileStatsTab = $state('base');
 	let focusedStatInput = $state('');
+	let draftStatInputs: Record<string, string> = $state({});
 	let equivalenceValues = $state({ perc: 1, critical: 10 });
 
 	const report = $derived(calculateDashboard(calculator));
@@ -315,8 +318,11 @@
 		}
 	}
 
-	function setStat(stats: UiStats, key: StatKey, index: 0 | 1, value: string) {
-		stats[key][index] = cleanNumericText(value);
+	function setStat(stats: UiStats, key: StatKey, index: 0 | 1, inputId: string, draftValue: string) {
+		const cleaned = cleanNumericText(draftValue);
+		const invalid = cleaned !== '' && !Number.isFinite(Number(cleaned));
+		stats[key][index] = invalid ? draftValue : cleaned;
+		setDraftStatInput(inputId, draftValue);
 	}
 
 	function cloneUiStats(stats: UiStats): UiStats {
@@ -327,6 +333,7 @@
 		const source = sourcePanelId === 'a' ? calculator.statsA : calculator.statsB;
 		if (targetPanelId === 'a') calculator.statsA = cloneUiStats(source);
 		if (targetPanelId === 'b') calculator.statsB = cloneUiStats(source);
+		clearDraftsForPanel(targetPanelId);
 	}
 
 	function swapPanels() {
@@ -334,17 +341,21 @@
 		const nextB = cloneUiStats(calculator.statsA);
 		calculator.statsA = nextA;
 		calculator.statsB = nextB;
+		clearDraftsForPanel('a');
+		clearDraftsForPanel('b');
 	}
 
 	function clearPanel(panelId: 'a' | 'b') {
 		if (panelId === 'a') calculator.statsA = clearUiStats();
 		if (panelId === 'b') calculator.statsB = clearUiStats();
+		clearDraftsForPanel(panelId);
 	}
 
 	function resetAll() {
 		calculator = createDefaultState();
 		selectedPreset = 'Hero (Greatsword)';
 		transferStatus = 'Reset.';
+		clearAllStatDrafts();
 	}
 
 	function applySelectedPreset() {
@@ -364,6 +375,7 @@
 		try {
 			calculator = parseStoredState(transferText);
 			transferStatus = 'Imported.';
+			clearAllStatDrafts();
 		} catch {
 			transferStatus = 'Import failed.';
 		}
@@ -438,9 +450,40 @@
 		return panelId === 'base' ? 'Base' : `Change ${panelId.toUpperCase()}`;
 	}
 
-	function displayStatValue(value: string | undefined, inputId: string, panelId: WorkbenchPanelId) {
+	function inputDraftValue(inputId: string, storedValue: string | undefined) {
+		return Object.hasOwn(draftStatInputs, inputId) ? draftStatInputs[inputId] : (storedValue ?? '');
+	}
+
+	function setDraftStatInput(inputId: string, value: string) {
+		draftStatInputs = { ...draftStatInputs, [inputId]: value };
+	}
+
+	function clearDraftsByPrefixes(prefixes: string[]) {
+		const next = Object.fromEntries(
+			Object.entries(draftStatInputs).filter(([key]) => !prefixes.some((prefix) => key.startsWith(prefix)))
+		);
+		draftStatInputs = next;
+	}
+
+	function clearDraftsForPanel(panelId: WorkbenchPanelId) {
+		clearDraftsByPrefixes([`${panelId}-`, `mobile-${panelId}-`]);
+	}
+
+	function clearDraftsForStat(panelId: WorkbenchPanelId, key: StatKey, index: 0 | 1) {
+		const suffix = `${key}-${index === 0 ? 'flat' : 'percent'}`;
+		const blocked = new Set([`${panelId}-${suffix}`, `mobile-${panelId}-${suffix}`]);
+		draftStatInputs = Object.fromEntries(
+			Object.entries(draftStatInputs).filter(([draftKey]) => !blocked.has(draftKey))
+		);
+	}
+
+	function clearAllStatDrafts() {
+		draftStatInputs = {};
+	}
+
+	function displayOverlayValue(value: string | undefined, panelId: WorkbenchPanelId) {
 		const cleaned = cleanNumericText(value ?? '');
-		if (!cleaned || focusedStatInput === inputId) return cleaned;
+		if (!cleaned) return cleaned;
 		const parsed = Number(cleaned);
 		if (!Number.isFinite(parsed)) return cleaned;
 		const formatted = statInputFormatter.format(parsed);
@@ -453,6 +496,7 @@
 		inputId: string,
 		index: 0 | 1
 	): WorkbenchInputState {
+		const draftValue = inputDraftValue(inputId, value);
 		const cleaned = cleanNumericText(value ?? '');
 		const numericValue = Number(cleaned);
 		const focused = focusedStatInput === inputId;
@@ -460,12 +504,14 @@
 
 		return {
 			cleaned,
-			displayValue: displayStatValue(value, inputId, panelId),
+			displayValue: displayOverlayValue(value, panelId),
+			draftValue,
 			filled: Number.isFinite(numericValue) && Math.abs(numericValue) > SCORE_EPSILON,
 			focused,
-			hasContent: cleaned !== '',
+			hasContent: draftValue !== '' || cleaned !== '',
 			invalid,
 			numericValue: Number.isFinite(numericValue) ? numericValue : 0,
+			showDisplayOverlay: !focused && cleaned !== '' && !invalid,
 			showPercentSuffix: index === 1 && !focused
 		};
 	}
@@ -479,8 +525,33 @@
 		focusedStatInput = '';
 	}
 
-	function clearStatValue(stats: UiStats, key: StatKey, index: 0 | 1) {
+	function clearStatValue(stats: UiStats, panelId: WorkbenchPanelId, key: StatKey, index: 0 | 1) {
 		stats[key][index] = '';
+		clearDraftsForStat(panelId, key, index);
+	}
+
+	function handleStatPaste(
+		event: ClipboardEvent,
+		stats: UiStats,
+		key: StatKey,
+		index: 0 | 1,
+		inputId: string
+	) {
+		const text = event.clipboardData?.getData('text');
+		if (text === undefined) return;
+		const cleaned = cleanNumericText(text);
+		event.preventDefault();
+
+		const input = event.currentTarget as HTMLInputElement;
+		if (document.execCommand?.('insertText', false, cleaned)) return;
+
+		const start = input.selectionStart ?? input.value.length;
+		const end = input.selectionEnd ?? input.value.length;
+		const nextValue = `${input.value.slice(0, start)}${cleaned}${input.value.slice(end)}`;
+		input.value = nextValue;
+		const nextCursor = start + cleaned.length;
+		input.setSelectionRange(nextCursor, nextCursor);
+		setStat(stats, key, index, inputId, nextValue);
 	}
 
 	function moveStatFocus(panelId: string, key: StatKey, index: 0 | 1, direction: 1 | -1) {
@@ -1605,15 +1676,23 @@
 			id={inputId}
 			type="text"
 			inputmode="decimal"
-			value={state.displayValue}
+			value={state.draftValue}
 			aria-label={`${panelLabel(toneId)} ${STAT_LABELS[key]} ${index === 0 ? 'flat' : 'percent'}`}
 			aria-invalid={state.invalid}
-			class={`h-8 rounded-sm border border-border/30 bg-background/35 px-2 text-right text-xs tabular-nums shadow-none transition-[background-color,border-color,color,box-shadow] hover:border-border/70 hover:bg-background/60 focus-visible:border-ring focus-visible:bg-background focus-visible:ring-2 ${state.showPercentSuffix ? 'pr-5' : ''} ${inputToneClass(toneId, state)}`}
+			class={`h-8 rounded-sm border border-border/30 bg-background/35 px-2 text-right text-xs tabular-nums shadow-none transition-[background-color,border-color,color,box-shadow] hover:border-border/70 hover:bg-background/60 focus-visible:border-ring focus-visible:bg-background focus-visible:ring-2 ${state.showPercentSuffix ? 'pr-5' : ''} ${state.showDisplayOverlay ? 'text-transparent caret-foreground' : inputToneClass(toneId, state)}`}
 			onfocus={(event) => focusStatInput(inputId, event)}
 			onblur={blurStatInput}
 			onkeydown={(event) => handleStatKeydown(event, panelId, key, index)}
-			oninput={(event) => setStat(stats, key, index, inputValue(event))}
+			onpaste={(event) => handleStatPaste(event, stats, key, index, inputId)}
+			oninput={(event) => setStat(stats, key, index, inputId, inputValue(event))}
 		/>
+		{#if state.showDisplayOverlay}
+			<span
+				class={`pointer-events-none absolute inset-y-1 left-1 right-1 flex items-center justify-end rounded-sm px-2 text-xs tabular-nums ${state.showPercentSuffix ? 'pr-5' : ''} ${inputToneClass(toneId, state)}`}
+			>
+				{state.displayValue}
+			</span>
+		{/if}
 		{#if state.showPercentSuffix}
 			<span
 				class={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] tabular-nums ${state.invalid ? 'text-destructive/70' : 'text-muted-foreground/70'}`}
@@ -1627,7 +1706,7 @@
 				tabindex="-1"
 				aria-label={`Clear ${panelLabel(toneId)} ${STAT_LABELS[key]} ${index === 0 ? 'flat' : 'percent'}`}
 				class="absolute left-1.5 top-1/2 z-10 grid size-5 -translate-y-1/2 place-items-center rounded-sm border border-border/50 bg-background/95 text-muted-foreground opacity-0 shadow-sm transition hover:text-foreground group-hover/cell:opacity-100 group-focus-within/cell:opacity-100"
-				onclick={() => clearStatValue(stats, key, index)}
+				onclick={() => clearStatValue(stats, toneId, key, index)}
 			>
 				<XIcon class="size-3" />
 			</button>
