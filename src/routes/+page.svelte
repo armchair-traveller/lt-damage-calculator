@@ -173,6 +173,7 @@
 	let selectedPreset = $state('Hero (Greatsword)');
 	let buffsOpen = $state(false);
 	let equivalenceOpen = $state(false);
+	let auditOpen = $state(false);
 	let transferOpen = $state(false);
 	let transferText = $state('');
 	let transferStatus = $state('');
@@ -201,7 +202,7 @@
 			label: 'Changes A',
 			shortLabel: 'A',
 			buffedDamage: report.formatted.buffedA,
-			buffedIncrease: report.formatted.buffedIncreaseA,
+			buffedIncrease: formatMetricIncreases(report.raw.buffedIncreaseA),
 			rawBuffedIncrease: report.raw.buffedIncreaseA,
 			rawIncrease: report.raw.buffedIncreaseA.avg,
 			rawDamage: report.raw.buffedA.avg
@@ -211,7 +212,7 @@
 			label: 'Changes B',
 			shortLabel: 'B',
 			buffedDamage: report.formatted.buffedB,
-			buffedIncrease: report.formatted.buffedIncreaseB,
+			buffedIncrease: formatMetricIncreases(report.raw.buffedIncreaseB),
 			rawBuffedIncrease: report.raw.buffedIncreaseB,
 			rawIncrease: report.raw.buffedIncreaseB.avg,
 			rawDamage: report.raw.buffedB.avg
@@ -242,41 +243,6 @@
 	);
 	const hasAChanges = $derived(panelHasEnteredValues(calculator.statsA));
 	const hasBChanges = $derived(panelHasEnteredValues(calculator.statsB));
-	const damageScaleMax = $derived(
-		Math.max(
-			report.raw.base.avg,
-			report.raw.buffed.avg,
-			report.raw.buffedA.avg,
-			report.raw.buffedB.avg,
-			1
-		)
-	);
-	const damageBars = $derived([
-		{
-			id: 'base',
-			label: 'Base',
-			value: report.raw.base.avg,
-			formatted: report.formatted.base.avg
-		},
-		{
-			id: 'buffed',
-			label: 'Buffed',
-			value: report.raw.buffed.avg,
-			formatted: report.formatted.buffed.avg
-		},
-		{
-			id: 'a',
-			label: 'A Buffed',
-			value: report.raw.buffedA.avg,
-			formatted: report.formatted.buffedA.avg
-		},
-		{
-			id: 'b',
-			label: 'B Buffed',
-			value: report.raw.buffedB.avg,
-			formatted: report.formatted.buffedB.avg
-		}
-	]);
 
 	$effect(() => {
 		if (!browser || hydrated) return;
@@ -734,6 +700,20 @@
 		return `${(value * 100).toFixed(1)}%`;
 	}
 
+	function formatDisplayIncrease(value: number) {
+		if (!Number.isFinite(value)) return '---';
+		const sign = value >= 0 ? '+' : '';
+		return `${sign}${(value * 100).toFixed(3)}%`;
+	}
+
+	function formatMetricIncreases(values: MetricValues<number>): MetricValues<string> {
+		return {
+			avg: formatDisplayIncrease(values.avg),
+			normal: formatDisplayIncrease(values.normal),
+			boss: formatDisplayIncrease(values.boss)
+		};
+	}
+
 	function formatNumber(value: number) {
 		const sign = value > 0 ? '+' : '';
 		return `${sign}${numberFormatter.format(value)}`;
@@ -754,7 +734,7 @@
 	function formatPointDeltaValue(value: number) {
 		if (!Number.isFinite(value)) return '---';
 		const sign = value > 0 ? '+' : '';
-		return `${sign}${(value * 100).toFixed(5)}`;
+		return `${sign}${(value * 100).toFixed(3)}`;
 	}
 
 	function sortableScore(value: number) {
@@ -887,11 +867,6 @@
 		return value > 0 ? `left: 50%; width: ${width}%;` : `right: 50%; width: ${width}%;`;
 	}
 
-	function barWidth(value: number, max: number) {
-		if (!Number.isFinite(value) || max <= 0) return '0%';
-		return `${Math.max(4, Math.min(100, (value / max) * 100)).toFixed(2)}%`;
-	}
-
 	function scrollToSection(id: string) {
 		if (!browser) return;
 		document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -964,7 +939,7 @@
 						</Badge>
 						<Badge>
 							<SparklesIcon data-icon="inline-start" />
-							{report.formatted.buffIncrease.avg}
+							{formatDisplayIncrease(report.raw.buffIncrease.avg)}
 						</Badge>
 						{#if changeSummary}
 							<Badge variant="outline" class="border-chart-2/60 bg-chart-2/10">
@@ -1037,8 +1012,8 @@
 		</div>
 	</header>
 
-	<section class="mx-auto grid max-w-[1760px] gap-4 px-4 py-4 lg:px-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-		<section class="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+	<section class="mx-auto grid max-w-[1760px] min-w-0 gap-4 px-4 py-4 lg:px-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+		<section class="min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
 			<div class="flex flex-wrap items-center justify-between gap-3 border-b border-border/80 px-4 py-3">
 				<div class="flex min-w-0 flex-wrap items-center gap-2">
 					<BarChart3Icon class="size-4 text-primary" />
@@ -1137,14 +1112,14 @@
 					<div class="mt-2 grid grid-cols-2 gap-2 text-xs">
 						<div class="rounded-md border border-chart-2/40 bg-chart-2/10 px-2 py-1.5">
 							<div class="text-[10px] font-semibold text-chart-2">A</div>
-							<div class={`${activeTone(report.formatted.buffedIncreaseA.avg)} mt-0.5 truncate`}>
-								{report.formatted.buffedIncreaseA.avg}
+							<div class={`${activeTone(formatDisplayIncrease(report.raw.buffedIncreaseA.avg))} mt-0.5 truncate`}>
+								{formatDisplayIncrease(report.raw.buffedIncreaseA.avg)}
 							</div>
 						</div>
 						<div class="rounded-md border border-chart-4/40 bg-chart-4/10 px-2 py-1.5">
 							<div class="text-[10px] font-semibold text-chart-4">B</div>
-							<div class={`${activeTone(report.formatted.buffedIncreaseB.avg)} mt-0.5 truncate`}>
-								{report.formatted.buffedIncreaseB.avg}
+							<div class={`${activeTone(formatDisplayIncrease(report.raw.buffedIncreaseB.avg))} mt-0.5 truncate`}>
+								{formatDisplayIncrease(report.raw.buffedIncreaseB.avg)}
 							</div>
 						</div>
 					</div>
@@ -1233,8 +1208,8 @@
 			</div>
 		</section>
 
-		<aside class="grid gap-4">
-			<section class="rounded-lg border border-border bg-card shadow-sm">
+		<aside class="grid min-w-0 gap-4">
+			<section class="min-w-0 rounded-lg border border-border bg-card shadow-sm">
 				<div class="flex items-center justify-between gap-2 border-b border-border/80 px-4 py-3">
 					<div class="flex items-center gap-2">
 						<GaugeIcon class="size-4 text-primary" />
@@ -1363,36 +1338,11 @@
 								</div>
 							{/each}
 						</div>
-
-						<div class="space-y-2 border-t border-border/80 pt-4">
-							<div class="flex items-center justify-between text-xs">
-								<span class="font-semibold">Damage totals</span>
-								<span class={activeTone(report.formatted.buffIncrease.avg)}>
-									{report.formatted.buffIncrease.avg}
-								</span>
-							</div>
-							{#each damageBars as bar}
-								<div class="grid grid-cols-[4.75rem_minmax(0,1fr)_4.75rem] items-center gap-2 text-xs">
-									<span class="truncate text-muted-foreground">{bar.label}</span>
-									<div class="h-1.5 overflow-hidden rounded-sm bg-muted/70">
-										<div
-											class="h-full rounded-sm opacity-85"
-											class:bg-chart-3={bar.id === 'base'}
-											class:bg-chart-1={bar.id === 'buffed'}
-											class:bg-chart-2={bar.id === 'a'}
-											class:bg-chart-4={bar.id === 'b'}
-											style={`width: ${barWidth(bar.value, damageScaleMax)}`}
-										></div>
-									</div>
-									<span class="text-right font-medium tabular-nums">{bar.formatted}</span>
-								</div>
-							{/each}
-						</div>
 					</div>
 				</Tooltip.Provider>
 			</section>
 
-			<section id="parameters" class="rounded-lg border border-border bg-card shadow-sm">
+			<section id="parameters" class="min-w-0 rounded-lg border border-border bg-card shadow-sm">
 				<div class="flex items-center gap-2 border-b border-border/80 px-4 py-3">
 					<SlidersHorizontalIcon class="size-4 text-primary" />
 					<h2 class="text-sm font-semibold">Parameters</h2>
@@ -1459,8 +1409,8 @@
 		</aside>
 	</section>
 
-	<section class="mx-auto grid max-w-[1760px] gap-4 px-4 pb-6 lg:px-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-		<section id="equivalence" class="rounded-lg border border-border bg-card shadow-sm">
+	<section class="mx-auto grid max-w-[1760px] min-w-0 gap-4 px-4 pb-6 lg:px-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+		<section id="equivalence" class="min-w-0 rounded-lg border border-border bg-card shadow-sm">
 			<div class="flex flex-wrap items-center justify-between gap-3 border-b border-border/80 px-4 py-3">
 				<div class="flex items-center gap-2">
 					<ScaleIcon class="size-4 text-primary" />
@@ -1471,19 +1421,39 @@
 					Open
 				</Button>
 			</div>
-			<div class="p-4">
+			<div class="min-w-0 p-4">
 				{@render equivalencePanel('main')}
 			</div>
 		</section>
 
-		<div class="grid gap-4">
-			<section class="rounded-lg border border-border bg-card shadow-sm">
+		<div class="grid min-w-0 gap-4">
+			<section class="min-w-0 rounded-lg border border-border bg-card shadow-sm">
 				<div class="flex items-center justify-between gap-2 border-b border-border/80 px-4 py-3">
 					<div class="flex items-center gap-2">
 						<ListChecksIcon class="size-4 text-primary" />
 						<h2 class="text-sm font-semibold">Buff Ledger</h2>
 					</div>
-					<Badge variant="secondary">{activeBuffCount} active</Badge>
+					<div class="flex items-center gap-2">
+						<Badge variant="secondary">{activeBuffCount} active</Badge>
+						<Tooltip.Provider delayDuration={120}>
+							<Tooltip.Root>
+								<Tooltip.Trigger>
+									{#snippet child({ props })}
+										<Button
+											{...props}
+											variant="outline"
+											size="icon-sm"
+											aria-label="Audit details"
+											onclick={() => (auditOpen = true)}
+										>
+											<PanelRightOpenIcon />
+										</Button>
+									{/snippet}
+								</Tooltip.Trigger>
+								<Tooltip.Content side="bottom" sideOffset={6}>Audit Details</Tooltip.Content>
+							</Tooltip.Root>
+						</Tooltip.Provider>
+					</div>
 				</div>
 				<div class="max-h-[22rem] overflow-y-auto p-4">
 					{#if buffDeltaRows.length}
@@ -1498,48 +1468,6 @@
 					{:else}
 						<p class="text-sm text-muted-foreground">No active buff deltas.</p>
 					{/if}
-				</div>
-			</section>
-
-			<section class="rounded-lg border border-border bg-card shadow-sm">
-				<div class="flex items-center gap-2 border-b border-border/80 px-4 py-3">
-					<BadgePercentIcon class="size-4 text-primary" />
-					<h2 class="text-sm font-semibold">Buffed Stats</h2>
-				</div>
-				<div class="max-h-[22rem] overflow-y-auto p-4">
-					<div class="space-y-2">
-						{#each STAT_KEYS as key}
-							<div class="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-border/60 pb-2 text-xs last:border-b-0 last:pb-0">
-								<span class="truncate text-muted-foreground">{STAT_LABELS[key]}</span>
-								<span class="font-medium tabular-nums">{buffedUiStats[key][0]}</span>
-								<span class="text-muted-foreground tabular-nums">{buffedUiStats[key][1]}</span>
-							</div>
-						{/each}
-					</div>
-				</div>
-			</section>
-
-			<section class="rounded-lg border border-border bg-card shadow-sm">
-				<div class="flex items-center gap-2 border-b border-border/80 px-4 py-3">
-					<TargetIcon class="size-4 text-primary" />
-					<h2 class="text-sm font-semibold">Target Profile</h2>
-				</div>
-				<div class="grid gap-3 p-4">
-					{#each ENEMY_TYPES as enemy}
-						<div class="space-y-2 border-b border-border/70 pb-3 last:border-b-0 last:pb-0">
-							<div class="text-xs font-semibold uppercase text-muted-foreground">{enemy}</div>
-							<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-								<span class="text-muted-foreground">Scaling</span>
-								<span class="text-right tabular-nums">{report.defenses[enemy].multiplier}</span>
-								<span class="text-muted-foreground">Flat</span>
-								<span class="text-right tabular-nums">{report.defenses[enemy].flat.toLocaleString()}</span>
-								<span class="text-muted-foreground">Mitigation</span>
-								<span class="text-right tabular-nums">{formatPercent(report.defenses[enemy].mitigation)}</span>
-								<span class="text-muted-foreground">Phasing</span>
-								<span class="text-right tabular-nums">{formatPercent(report.defenses[enemy].phasing)}</span>
-							</div>
-						</div>
-					{/each}
 				</div>
 			</section>
 		</div>
@@ -1632,6 +1560,58 @@
 		</Sheet.Header>
 		<div class="p-5">
 			{@render equivalencePanel('sheet')}
+		</div>
+	</Sheet.Content>
+</Sheet.Root>
+
+<Sheet.Root bind:open={auditOpen}>
+	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,34rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
+		<Sheet.Header class="border-b border-border/80 px-5 py-4">
+			<Sheet.Title>Audit Details</Sheet.Title>
+		</Sheet.Header>
+
+		<div class="space-y-4 p-5">
+			<section class="rounded-lg border border-border bg-card">
+				<div class="flex items-center gap-2 border-b border-border/80 px-4 py-3">
+					<BadgePercentIcon class="size-4 text-primary" />
+					<h2 class="text-sm font-semibold">Buffed Stats</h2>
+				</div>
+				<div class="max-h-[24rem] overflow-y-auto p-4">
+					<div class="space-y-2">
+						{#each STAT_KEYS as key}
+							<div class="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-border/60 pb-2 text-xs last:border-b-0 last:pb-0">
+								<span class="truncate text-muted-foreground">{STAT_LABELS[key]}</span>
+								<span class="font-medium tabular-nums">{buffedUiStats[key][0]}</span>
+								<span class="text-muted-foreground tabular-nums">{buffedUiStats[key][1]}</span>
+							</div>
+						{/each}
+					</div>
+				</div>
+			</section>
+
+			<section class="rounded-lg border border-border bg-card">
+				<div class="flex items-center gap-2 border-b border-border/80 px-4 py-3">
+					<TargetIcon class="size-4 text-primary" />
+					<h2 class="text-sm font-semibold">Target Profile</h2>
+				</div>
+				<div class="grid gap-3 p-4">
+					{#each ENEMY_TYPES as enemy}
+						<div class="space-y-2 border-b border-border/70 pb-3 last:border-b-0 last:pb-0">
+							<div class="text-xs font-semibold uppercase text-muted-foreground">{enemy}</div>
+							<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+								<span class="text-muted-foreground">Scaling</span>
+								<span class="text-right tabular-nums">{report.defenses[enemy].multiplier}</span>
+								<span class="text-muted-foreground">Flat</span>
+								<span class="text-right tabular-nums">{report.defenses[enemy].flat.toLocaleString()}</span>
+								<span class="text-muted-foreground">Mitigation</span>
+								<span class="text-right tabular-nums">{formatPercent(report.defenses[enemy].mitigation)}</span>
+								<span class="text-muted-foreground">Phasing</span>
+								<span class="text-right tabular-nums">{formatPercent(report.defenses[enemy].phasing)}</span>
+							</div>
+						</div>
+					{/each}
+				</div>
+			</section>
 		</div>
 	</Sheet.Content>
 </Sheet.Root>
@@ -1769,16 +1749,18 @@
 
 {#snippet workbenchImpactCell(row: WorkbenchImpactRow)}
 	<div class="grid min-h-10 grid-cols-[minmax(0,1fr)_4.75rem] items-center gap-2 border-b border-l border-r border-border/70 bg-background/45 px-2 py-1">
-		<div class="relative h-4 overflow-hidden rounded-sm bg-muted/70">
-			<div class="absolute left-1/2 top-0 h-full w-px bg-border"></div>
-			<div
-				class={`absolute top-1/2 h-2 -translate-y-1/2 rounded-sm ${deltaBarClass(row.delta)}`}
-				style={deltaBarStyle(row.delta, workbenchImpactScaleMax)}
-			></div>
-		</div>
-		<div class={`${deltaToneClass(row.delta)} truncate text-right text-[10px] font-medium tabular-nums`}>
-			{row.summary}
-		</div>
+		{#if row.hasInput}
+			<div class="relative h-4 overflow-hidden rounded-sm bg-muted/70">
+				<div class="absolute left-1/2 top-0 h-full w-px bg-border"></div>
+				<div
+					class={`absolute top-1/2 h-2 -translate-y-1/2 rounded-sm ${deltaBarClass(row.delta)}`}
+					style={deltaBarStyle(row.delta, workbenchImpactScaleMax)}
+				></div>
+			</div>
+			<div class={`${deltaToneClass(row.delta)} truncate text-right text-[10px] font-medium tabular-nums`}>
+				{row.summary}
+			</div>
+		{/if}
 	</div>
 {/snippet}
 
