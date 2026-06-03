@@ -3,14 +3,17 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
+	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 	import BadgePercentIcon from '@lucide/svelte/icons/badge-percent';
 	import BarChart3Icon from '@lucide/svelte/icons/bar-chart-3';
+	import CopyIcon from '@lucide/svelte/icons/copy';
 	import ClipboardCopyIcon from '@lucide/svelte/icons/clipboard-copy';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ScaleIcon from '@lucide/svelte/icons/scale';
@@ -20,6 +23,7 @@
 	import TrophyIcon from '@lucide/svelte/icons/trophy';
 	import UploadIcon from '@lucide/svelte/icons/upload';
 	import WandSparklesIcon from '@lucide/svelte/icons/wand-sparkles';
+	import XIcon from '@lucide/svelte/icons/x';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
@@ -71,6 +75,9 @@
 	const numberFormatter = new Intl.NumberFormat('en-US', {
 		maximumFractionDigits: 2
 	});
+	const statInputFormatter = new Intl.NumberFormat('en-US', {
+		maximumFractionDigits: 5
+	});
 
 	const STAT_GROUPS = [
 		{
@@ -97,6 +104,7 @@
 
 	type ComparisonMetricId = (typeof COMPARISON_METRICS)[number]['id'];
 	type ComparisonSide = 'a' | 'b';
+	type WorkbenchPanelId = 'base' | ComparisonSide;
 	type MetricValues<T> = Record<ComparisonMetricId, T>;
 	type ComparisonRank = {
 		rank: number;
@@ -131,6 +139,32 @@
 		detail: string;
 		marginValueLabel: string;
 	};
+	type WorkbenchImpactRow = {
+		key: StatKey;
+		aImpact: number;
+		bImpact: number;
+		delta: number;
+		hasInput: boolean;
+		winner: ComparisonSide | 'tie' | 'empty';
+		summary: string;
+	};
+	type WorkbenchInputState = {
+		cleaned: string;
+		displayValue: string;
+		filled: boolean;
+		focused: boolean;
+		hasContent: boolean;
+		invalid: boolean;
+		numericValue: number;
+		showPercentSuffix: boolean;
+	};
+	type WorkbenchCellImpact = {
+		id: string;
+		panelId: ComparisonSide;
+		key: StatKey;
+		index: 0 | 1;
+		value: number;
+	};
 
 	let calculator: CalculatorState = $state(createDefaultState());
 	let hydrated = $state(false);
@@ -143,6 +177,7 @@
 	let buffQuery = $state('');
 	let equivalenceTab = $state('damage');
 	let mobileStatsTab = $state('base');
+	let focusedStatInput = $state('');
 	let equivalenceValues = $state({ perc: 1, critical: 10 });
 
 	const report = $derived(calculateDashboard(calculator));
@@ -185,6 +220,25 @@
 	const comparisonDeltaScaleMax = $derived(
 		Math.max(MIN_DELTA_SCALE, ...comparisonDeltas.map((delta) => Math.abs(delta.value)))
 	);
+	const workbenchImpactRows = $derived(buildWorkbenchImpactRows(calculator));
+	const workbenchImpactByKey = $derived(
+		Object.fromEntries(workbenchImpactRows.map((row) => [row.key, row])) as Record<StatKey, WorkbenchImpactRow>
+	);
+	const workbenchImpactScaleMax = $derived(
+		Math.max(MIN_DELTA_SCALE, ...workbenchImpactRows.map((row) => Math.abs(row.delta)))
+	);
+	const workbenchCellImpacts = $derived(buildWorkbenchCellImpacts(calculator));
+	const workbenchCellImpactById = $derived(
+		Object.fromEntries(workbenchCellImpacts.map((impact) => [impact.id, impact])) as Record<
+			string,
+			WorkbenchCellImpact | undefined
+		>
+	);
+	const workbenchCellImpactScaleMax = $derived(
+		Math.max(MIN_DELTA_SCALE, ...workbenchCellImpacts.map((impact) => Math.abs(impact.value)))
+	);
+	const hasAChanges = $derived(panelHasEnteredValues(calculator.statsA));
+	const hasBChanges = $derived(panelHasEnteredValues(calculator.statsB));
 	const damageScaleMax = $derived(
 		Math.max(
 			report.raw.base.avg,
@@ -262,7 +316,24 @@
 	}
 
 	function setStat(stats: UiStats, key: StatKey, index: 0 | 1, value: string) {
-		stats[key][index] = value;
+		stats[key][index] = cleanNumericText(value);
+	}
+
+	function cloneUiStats(stats: UiStats): UiStats {
+		return Object.fromEntries(STAT_KEYS.map((key) => [key, [stats[key][0], stats[key][1]]])) as UiStats;
+	}
+
+	function copyPanelToPanel(sourcePanelId: ComparisonSide, targetPanelId: ComparisonSide) {
+		const source = sourcePanelId === 'a' ? calculator.statsA : calculator.statsB;
+		if (targetPanelId === 'a') calculator.statsA = cloneUiStats(source);
+		if (targetPanelId === 'b') calculator.statsB = cloneUiStats(source);
+	}
+
+	function swapPanels() {
+		const nextA = cloneUiStats(calculator.statsB);
+		const nextB = cloneUiStats(calculator.statsA);
+		calculator.statsA = nextA;
+		calculator.statsB = nextB;
 	}
 
 	function clearPanel(panelId: 'a' | 'b') {
@@ -321,6 +392,267 @@
 
 	function inputValue(event: Event) {
 		return (event.currentTarget as HTMLInputElement).value;
+	}
+
+	function sanitizeNumericText(value: string) {
+		return value.replace(/[,%\s]/g, '').replace(/^\+/, '');
+	}
+
+	function cleanNumericText(value: string) {
+		return sanitizeNumericText(value);
+	}
+
+	function numericTextValue(value: string | undefined) {
+		const parsed = Number(cleanNumericText(value ?? ''));
+		return Number.isFinite(parsed) ? parsed : 0;
+	}
+
+	function hasInputValue(value: string | undefined) {
+		return cleanNumericText(value ?? '') !== '';
+	}
+
+	function isInvalidNumericText(value: string | undefined) {
+		const cleaned = cleanNumericText(value ?? '');
+		return cleaned !== '' && !Number.isFinite(Number(cleaned));
+	}
+
+	function isNonZeroValue(value: string | undefined) {
+		const cleaned = cleanNumericText(value ?? '');
+		const parsed = Number(cleaned);
+		return Number.isFinite(parsed) && Math.abs(parsed) > SCORE_EPSILON;
+	}
+
+	function panelHasEnteredValues(stats: UiStats) {
+		return STAT_KEYS.some((key) => hasInputValue(stats[key][0]) || hasInputValue(stats[key][1]));
+	}
+
+	function statInputId(panelId: string, key: StatKey, index: 0 | 1) {
+		return `${panelId}-${key}-${index === 0 ? 'flat' : 'percent'}`;
+	}
+
+	function cellImpactId(panelId: ComparisonSide, key: StatKey, index: 0 | 1) {
+		return `${panelId}-${key}-${index}`;
+	}
+
+	function panelLabel(panelId: WorkbenchPanelId) {
+		return panelId === 'base' ? 'Base' : `Change ${panelId.toUpperCase()}`;
+	}
+
+	function displayStatValue(value: string | undefined, inputId: string, panelId: WorkbenchPanelId) {
+		const cleaned = cleanNumericText(value ?? '');
+		if (!cleaned || focusedStatInput === inputId) return cleaned;
+		const parsed = Number(cleaned);
+		if (!Number.isFinite(parsed)) return cleaned;
+		const formatted = statInputFormatter.format(parsed);
+		return panelId !== 'base' && parsed > 0 ? `+${formatted}` : formatted;
+	}
+
+	function inputState(
+		panelId: WorkbenchPanelId,
+		value: string | undefined,
+		inputId: string,
+		index: 0 | 1
+	): WorkbenchInputState {
+		const cleaned = cleanNumericText(value ?? '');
+		const numericValue = Number(cleaned);
+		const focused = focusedStatInput === inputId;
+		const invalid = cleaned !== '' && !Number.isFinite(numericValue);
+
+		return {
+			cleaned,
+			displayValue: displayStatValue(value, inputId, panelId),
+			filled: Number.isFinite(numericValue) && Math.abs(numericValue) > SCORE_EPSILON,
+			focused,
+			hasContent: cleaned !== '',
+			invalid,
+			numericValue: Number.isFinite(numericValue) ? numericValue : 0,
+			showPercentSuffix: index === 1 && !focused
+		};
+	}
+
+	function focusStatInput(inputId: string, event: FocusEvent) {
+		focusedStatInput = inputId;
+		(event.currentTarget as HTMLInputElement).select();
+	}
+
+	function blurStatInput() {
+		focusedStatInput = '';
+	}
+
+	function clearStatValue(stats: UiStats, key: StatKey, index: 0 | 1) {
+		stats[key][index] = '';
+	}
+
+	function moveStatFocus(panelId: string, key: StatKey, index: 0 | 1, direction: 1 | -1) {
+		if (!browser) return;
+		const currentIndex = STAT_KEYS.indexOf(key);
+		for (let offset = currentIndex + direction; offset >= 0 && offset < STAT_KEYS.length; offset += direction) {
+			const nextKey = STAT_KEYS[offset];
+			if (index === 1 && PERCENTLESS_STATS.has(nextKey)) continue;
+			const nextInput = document.getElementById(statInputId(panelId, nextKey, index)) as HTMLInputElement | null;
+			if (nextInput) {
+				nextInput.focus();
+				nextInput.select();
+				return;
+			}
+		}
+	}
+
+	function handleStatKeydown(
+		event: KeyboardEvent,
+		panelId: string,
+		key: StatKey,
+		index: 0 | 1
+	) {
+		if (event.key !== 'Enter') return;
+		event.preventDefault();
+		moveStatFocus(panelId, key, index, event.shiftKey ? -1 : 1);
+	}
+
+	function panelCellClass(panelId: WorkbenchPanelId, state: WorkbenchInputState) {
+		const rowHighlight = 'group-hover/row:bg-muted/25 group-focus-within/row:bg-muted/30';
+		if (state.invalid) {
+			return `border-destructive/50 border-l-destructive/70 bg-destructive/10 ${rowHighlight}`;
+		}
+		if (state.focused) {
+			return `border-ring/50 bg-background shadow-[inset_0_0_0_1px_var(--ring)] ${rowHighlight}`;
+		}
+		if (panelId === 'a') {
+			return state.filled
+				? `border-l-chart-2 bg-chart-2/10 ${rowHighlight}`
+				: `border-l-chart-2/50 bg-background/35 ${rowHighlight}`;
+		}
+		if (panelId === 'b') {
+			return state.filled
+				? `border-l-chart-4 bg-chart-4/10 ${rowHighlight}`
+				: `border-l-chart-4/50 bg-background/35 ${rowHighlight}`;
+		}
+		return state.filled ? `bg-background/75 ${rowHighlight}` : `bg-background/35 ${rowHighlight}`;
+	}
+
+	function lockedCellClass(panelId: WorkbenchPanelId) {
+		const rail =
+			panelId === 'a'
+				? 'border-l-chart-2/25'
+				: panelId === 'b'
+					? 'border-l-chart-4/25'
+					: 'border-l-border/70';
+		return `${rail} bg-muted/10 group-hover/row:bg-muted/20 group-focus-within/row:bg-muted/25`;
+	}
+
+	function inputToneClass(panelId: WorkbenchPanelId, state: WorkbenchInputState) {
+		if (state.invalid) return 'text-destructive';
+		if (!state.filled) return 'text-muted-foreground/75';
+		if (panelId === 'a') return 'text-chart-2';
+		if (panelId === 'b') return 'text-chart-4';
+		return 'text-foreground';
+	}
+
+	function cellImpactRailClass(panelId: WorkbenchPanelId, value: number) {
+		if (!Number.isFinite(value) || Math.abs(value) < SCORE_EPSILON) return 'bg-muted-foreground/45';
+		if (value < 0) return 'bg-destructive';
+		return panelId === 'b' ? 'bg-chart-4' : 'bg-chart-2';
+	}
+
+	function cellImpactRailStyle(value: number) {
+		if (!Number.isFinite(value) || Math.abs(value) < SCORE_EPSILON) return 'width: 0%;';
+		const width = Math.max(6, Math.min(100, (Math.abs(value) / workbenchCellImpactScaleMax) * 100)).toFixed(2);
+		return `width: ${width}%;`;
+	}
+
+	function cellImpactFor(panelId: WorkbenchPanelId, key: StatKey, index: 0 | 1) {
+		if (panelId === 'base') return undefined;
+		return workbenchCellImpactById[cellImpactId(panelId, key, index)];
+	}
+
+	function singleStatChanges(stats: UiStats, key: StatKey): UiStats {
+		const changes = clearUiStats();
+		changes[key] = [stats[key][0], stats[key][1]];
+		return changes;
+	}
+
+	function buildWorkbenchImpactRows(state: CalculatorState): WorkbenchImpactRow[] {
+		return STAT_KEYS.map((key) => {
+			const scopedReport = calculateDashboard({
+				...state,
+				statsA: singleStatChanges(state.statsA, key),
+				statsB: singleStatChanges(state.statsB, key)
+			});
+			const aImpact = scopedReport.raw.buffedIncreaseA.avg;
+			const bImpact = scopedReport.raw.buffedIncreaseB.avg;
+			const delta = aImpact - bImpact;
+			const hasInput =
+				isNonZeroValue(state.statsA[key][0]) ||
+				isNonZeroValue(state.statsA[key][1]) ||
+				isNonZeroValue(state.statsB[key][0]) ||
+				isNonZeroValue(state.statsB[key][1]);
+			const winner =
+				!hasInput || (!Number.isFinite(aImpact) && !Number.isFinite(bImpact))
+					? 'empty'
+					: Math.abs(delta) < SCORE_EPSILON
+						? 'tie'
+						: delta > 0
+							? 'a'
+							: 'b';
+			const winningImpact = winner === 'a' ? aImpact : winner === 'b' ? bImpact : Number.NaN;
+
+			return {
+				key,
+				aImpact,
+				bImpact,
+				delta,
+				hasInput,
+				winner,
+				summary:
+					winner === 'empty'
+						? 'No change'
+						: winner === 'tie'
+							? 'Even'
+							: `${winner.toUpperCase()} ${formatPointDelta(winningImpact)}`
+			};
+		});
+	}
+
+	function singleCellChanges(stats: UiStats, key: StatKey, index: 0 | 1): UiStats {
+		const changes = clearUiStats();
+		changes[key][index] = stats[key][index];
+		return changes;
+	}
+
+	function buildWorkbenchCellImpacts(state: CalculatorState): WorkbenchCellImpact[] {
+		const panels = [
+			{ panelId: 'a', stats: state.statsA },
+			{ panelId: 'b', stats: state.statsB }
+		] satisfies Array<{ panelId: ComparisonSide; stats: UiStats }>;
+		const impacts: WorkbenchCellImpact[] = [];
+
+		for (const { panelId, stats } of panels) {
+			for (const key of STAT_KEYS) {
+				for (const index of [0, 1] as const) {
+					if (index === 1 && PERCENTLESS_STATS.has(key)) continue;
+					if (!isNonZeroValue(stats[key][index])) continue;
+
+					const scopedReport = calculateDashboard({
+						...state,
+						statsA: panelId === 'a' ? singleCellChanges(stats, key, index) : clearUiStats(),
+						statsB: panelId === 'b' ? singleCellChanges(stats, key, index) : clearUiStats()
+					});
+
+					impacts.push({
+						id: cellImpactId(panelId, key, index),
+						panelId,
+						key,
+						index,
+						value:
+							panelId === 'a'
+								? scopedReport.raw.buffedIncreaseA.avg
+								: scopedReport.raw.buffedIncreaseB.avg
+					});
+				}
+			}
+		}
+
+		return impacts;
 	}
 
 	function activeTone(value: string | undefined) {
@@ -637,23 +969,115 @@
 	<section class="mx-auto grid max-w-[1760px] gap-4 px-4 py-4 lg:px-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
 		<section class="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
 			<div class="flex flex-wrap items-center justify-between gap-3 border-b border-border/80 px-4 py-3">
-				<div class="flex min-w-0 items-center gap-2">
+				<div class="flex min-w-0 flex-wrap items-center gap-2">
 					<BarChart3Icon class="size-4 text-primary" />
 					<h2 class="text-sm font-semibold">Stat Workbench</h2>
+					{#if changeSummary}
+						<Badge variant="outline" class="border-chart-2/60 bg-chart-2/10 text-[11px]">
+							{changeSummary.label} {changeSummary.value}
+						</Badge>
+					{/if}
 				</div>
-				<div class="flex flex-wrap items-center gap-2">
-					<Button variant="outline" size="sm" onclick={() => clearPanel('a')}>
-						<EraserIcon data-icon="inline-start" />
-						Clear A
-					</Button>
-					<Button variant="outline" size="sm" onclick={() => clearPanel('b')}>
-						<EraserIcon data-icon="inline-start" />
-						Clear B
-					</Button>
-				</div>
+				<Tooltip.Provider delayDuration={120}>
+					<div class="flex flex-wrap items-center gap-2">
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<Button
+										{...props}
+										variant="outline"
+										size="icon-sm"
+										aria-label="Copy A to B"
+										class="relative"
+										disabled={!hasAChanges}
+										onclick={() => copyPanelToPanel('a', 'b')}
+									>
+										<CopyIcon />
+										<span class="absolute -right-1 -top-1 grid size-4 place-items-center rounded-sm border border-chart-4/50 bg-card text-[9px] font-semibold text-chart-4">
+											B
+										</span>
+									</Button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content side="bottom" sideOffset={6}>Copy A to B</Tooltip.Content>
+						</Tooltip.Root>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<Button
+										{...props}
+										variant="outline"
+										size="icon-sm"
+										aria-label="Swap A and B"
+										disabled={!hasAChanges && !hasBChanges}
+										onclick={swapPanels}
+									>
+										<ArrowLeftRightIcon />
+									</Button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content side="bottom" sideOffset={6}>Swap A / B</Tooltip.Content>
+						</Tooltip.Root>
+						<div class="h-6 w-px bg-border/80"></div>
+						<Button
+							variant="outline"
+							size="sm"
+							aria-label="Clear A"
+							class="relative max-sm:w-8 max-sm:px-0"
+							disabled={!hasAChanges}
+							onclick={() => clearPanel('a')}
+						>
+							<EraserIcon data-icon="inline-start" />
+							<span class="max-sm:sr-only">Clear A</span>
+							<span class="absolute -right-1 -top-1 hidden size-4 place-items-center rounded-sm border border-chart-2/50 bg-card text-[9px] font-semibold text-chart-2 max-sm:grid">
+								A
+							</span>
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							aria-label="Clear B"
+							class="relative max-sm:w-8 max-sm:px-0"
+							disabled={!hasBChanges}
+							onclick={() => clearPanel('b')}
+						>
+							<EraserIcon data-icon="inline-start" />
+							<span class="max-sm:sr-only">Clear B</span>
+							<span class="absolute -right-1 -top-1 hidden size-4 place-items-center rounded-sm border border-chart-4/50 bg-card text-[9px] font-semibold text-chart-4 max-sm:grid">
+								B
+							</span>
+						</Button>
+					</div>
+				</Tooltip.Provider>
 			</div>
 
 			<div class="md:hidden">
+				<div class="m-3 mb-0 rounded-md border border-border/70 bg-background/60 p-3">
+					<div class="flex items-center justify-between gap-3">
+						<div class="text-xs font-semibold">A/B comparison</div>
+						{#if changeSummary}
+							<Badge variant="outline" class="border-chart-2/60 bg-chart-2/10 text-[11px]">
+								{changeSummary.label}
+							</Badge>
+						{:else}
+							<Badge variant="outline" class="text-[11px]">Even</Badge>
+						{/if}
+					</div>
+					<div class="mt-2 grid grid-cols-2 gap-2 text-xs">
+						<div class="rounded-md border border-chart-2/40 bg-chart-2/10 px-2 py-1.5">
+							<div class="text-[10px] font-semibold text-chart-2">A</div>
+							<div class={`${activeTone(report.formatted.buffedIncreaseA.avg)} mt-0.5 truncate`}>
+								{report.formatted.buffedIncreaseA.avg}
+							</div>
+						</div>
+						<div class="rounded-md border border-chart-4/40 bg-chart-4/10 px-2 py-1.5">
+							<div class="text-[10px] font-semibold text-chart-4">B</div>
+							<div class={`${activeTone(report.formatted.buffedIncreaseB.avg)} mt-0.5 truncate`}>
+								{report.formatted.buffedIncreaseB.avg}
+							</div>
+						</div>
+					</div>
+				</div>
 				<Tabs.Tabs bind:value={mobileStatsTab}>
 					<Tabs.List class="m-3 grid w-[calc(100%-1.5rem)] grid-cols-3">
 						<Tabs.Trigger value="base">Base</Tabs.Trigger>
@@ -661,63 +1085,76 @@
 						<Tabs.Trigger value="b">B</Tabs.Trigger>
 					</Tabs.List>
 					<Tabs.Content value="base">
-						{@render mobileStatsPanel('mobile-base', calculator.stats)}
+						{@render mobileStatsPanel('mobile-base', 'base', calculator.stats)}
 					</Tabs.Content>
 					<Tabs.Content value="a">
-						{@render mobileStatsPanel('mobile-a', calculator.statsA)}
+						{@render mobileStatsPanel('mobile-a', 'a', calculator.statsA)}
 					</Tabs.Content>
 					<Tabs.Content value="b">
-						{@render mobileStatsPanel('mobile-b', calculator.statsB)}
+						{@render mobileStatsPanel('mobile-b', 'b', calculator.statsB)}
 					</Tabs.Content>
 				</Tabs.Tabs>
 			</div>
 
 			<div class="hidden overflow-x-auto md:block">
-				<div class="min-w-[780px]">
+				<div class="min-w-[940px]">
 					<div
-						class="grid grid-cols-[10.5rem_repeat(6,minmax(4.5rem,1fr))] border-b border-border bg-muted/60 text-xs font-medium text-muted-foreground"
+						class="grid grid-cols-[11rem_repeat(4,minmax(5.25rem,1fr))_minmax(8.75rem,0.85fr)_repeat(2,minmax(5.25rem,1fr))] border-b border-border bg-muted/60 text-xs font-medium text-muted-foreground"
 					>
-						<div class="px-3 py-2">Stat</div>
-						<div class="px-2 py-2 text-right">Base</div>
-						<div class="px-2 py-2 text-right">Base %</div>
-						<div class="px-2 py-2 text-right">A Flat</div>
-						<div class="px-2 py-2 text-right">A %</div>
-						<div class="px-2 py-2 text-right">B Flat</div>
-						<div class="px-2 py-2 text-right">B %</div>
+						<div class="sticky left-0 z-20 row-span-2 flex items-center border-r border-border/70 bg-muted px-3 py-2">
+							Stat
+						</div>
+						<div class="col-span-2 border-r border-border/70 px-2 py-1.5 text-center">Base</div>
+						<div class="col-span-2 border-r border-chart-2/40 bg-chart-2/10 px-2 py-1.5 text-center text-chart-2">
+							Change A
+						</div>
+						<div class="row-span-2 flex items-center justify-center border-r border-border/70 px-2 py-2 text-center">
+							Impact
+						</div>
+						<div class="col-span-2 bg-chart-4/10 px-2 py-1.5 text-center text-chart-4">Change B</div>
+						<div class="border-r border-border/70 px-2 py-1.5 text-right">Flat</div>
+						<div class="border-r border-border/70 px-2 py-1.5 text-right">%</div>
+						<div class="border-r border-chart-2/40 px-2 py-1.5 text-right">Flat</div>
+						<div class="border-r border-chart-2/40 px-2 py-1.5 text-right">%</div>
+						<div class="border-r border-chart-4/40 px-2 py-1.5 text-right">Flat</div>
+						<div class="px-2 py-1.5 text-right">%</div>
 					</div>
 
 					{#each STAT_GROUPS as group}
-						<div class="grid grid-cols-[10.5rem_repeat(6,minmax(4.5rem,1fr))]">
-							<div class="col-span-7 border-b border-border/70 bg-background/70 px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
+						<div class="grid grid-cols-[11rem_repeat(4,minmax(5.25rem,1fr))_minmax(8.75rem,0.85fr)_repeat(2,minmax(5.25rem,1fr))]">
+							<div class="col-span-8 border-b border-border/80 bg-muted/35 px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
 								{group.label}
 							</div>
 							{#each group.keys as key}
-								<div class="flex min-h-10 items-center border-b border-border/70 px-3">
-									<Label
-										for={`base-${key}-flat`}
-										class="block min-w-0 truncate text-xs font-medium text-foreground/90"
-									>
-										{STAT_LABELS[key]}
-									</Label>
+								<div class="contents group/row">
+									<div class="sticky left-0 z-10 flex min-h-10 items-center border-b border-r border-border/70 bg-card/95 px-3 transition-colors group-hover/row:bg-muted/25 group-focus-within/row:bg-muted/30">
+										<Label
+											for={statInputId('base', key, 0)}
+											class="block min-w-0 truncate text-xs font-medium text-foreground/90"
+										>
+											{STAT_LABELS[key]}
+										</Label>
+									</div>
+									{@render statInput('base', 'base', calculator.stats, key, 0)}
+									{#if PERCENTLESS_STATS.has(key)}
+										{@render lockedPercentCell('base')}
+									{:else}
+										{@render statInput('base', 'base', calculator.stats, key, 1)}
+									{/if}
+									{@render statInput('a', 'a', calculator.statsA, key, 0)}
+									{#if PERCENTLESS_STATS.has(key)}
+										{@render lockedPercentCell('a')}
+									{:else}
+										{@render statInput('a', 'a', calculator.statsA, key, 1)}
+									{/if}
+									{@render workbenchImpactCell(workbenchImpactByKey[key])}
+									{@render statInput('b', 'b', calculator.statsB, key, 0)}
+									{#if PERCENTLESS_STATS.has(key)}
+										{@render lockedPercentCell('b')}
+									{:else}
+										{@render statInput('b', 'b', calculator.statsB, key, 1)}
+									{/if}
 								</div>
-								{@render statInput('base', calculator.stats, key, 0)}
-								{#if PERCENTLESS_STATS.has(key)}
-									{@render emptyPercentCell()}
-								{:else}
-									{@render statInput('base', calculator.stats, key, 1)}
-								{/if}
-								{@render statInput('a', calculator.statsA, key, 0)}
-								{#if PERCENTLESS_STATS.has(key)}
-									{@render emptyPercentCell()}
-								{:else}
-									{@render statInput('a', calculator.statsA, key, 1)}
-								{/if}
-								{@render statInput('b', calculator.statsB, key, 0)}
-								{#if PERCENTLESS_STATS.has(key)}
-									{@render emptyPercentCell()}
-								{:else}
-									{@render statInput('b', calculator.statsB, key, 1)}
-								{/if}
 							{/each}
 						</div>
 					{/each}
@@ -1157,22 +1594,56 @@
 	</Sheet.Content>
 </Sheet.Root>
 
-{#snippet statInput(panelId: string, stats: UiStats, key: StatKey, index: 0 | 1)}
-	<div class="border-b border-l border-border/70 p-1">
+{#snippet statInput(panelId: string, toneId: WorkbenchPanelId, stats: UiStats, key: StatKey, index: 0 | 1)}
+	{@const inputId = statInputId(panelId, key, index)}
+	{@const state = inputState(toneId, stats[key][index], inputId, index)}
+	{@const cellImpact = cellImpactFor(toneId, key, index)}
+	<div
+		class={`group/cell relative border-b border-l border-border/70 p-1 transition-colors ${panelCellClass(toneId, state)}`}
+	>
 		<Input
-			id={`${panelId}-${key}-${index === 0 ? 'flat' : 'percent'}`}
-			type="number"
+			id={inputId}
+			type="text"
 			inputmode="decimal"
-			step="any"
-			value={stats[key][index]}
-			aria-label={`${panelId} ${STAT_LABELS[key]} ${index === 0 ? 'flat' : 'percent'}`}
-			class="h-8 border-transparent bg-transparent px-2 text-right text-xs tabular-nums hover:bg-input/70 focus-visible:bg-background"
+			value={state.displayValue}
+			aria-label={`${panelLabel(toneId)} ${STAT_LABELS[key]} ${index === 0 ? 'flat' : 'percent'}`}
+			aria-invalid={state.invalid}
+			class={`h-8 rounded-sm border border-border/30 bg-background/35 px-2 text-right text-xs tabular-nums shadow-none transition-[background-color,border-color,color,box-shadow] hover:border-border/70 hover:bg-background/60 focus-visible:border-ring focus-visible:bg-background focus-visible:ring-2 ${state.showPercentSuffix ? 'pr-5' : ''} ${inputToneClass(toneId, state)}`}
+			onfocus={(event) => focusStatInput(inputId, event)}
+			onblur={blurStatInput}
+			onkeydown={(event) => handleStatKeydown(event, panelId, key, index)}
 			oninput={(event) => setStat(stats, key, index, inputValue(event))}
 		/>
+		{#if state.showPercentSuffix}
+			<span
+				class={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] tabular-nums ${state.invalid ? 'text-destructive/70' : 'text-muted-foreground/70'}`}
+			>
+				%
+			</span>
+		{/if}
+		{#if state.hasContent}
+			<button
+				type="button"
+				tabindex="-1"
+				aria-label={`Clear ${panelLabel(toneId)} ${STAT_LABELS[key]} ${index === 0 ? 'flat' : 'percent'}`}
+				class="absolute left-1.5 top-1/2 z-10 grid size-5 -translate-y-1/2 place-items-center rounded-sm border border-border/50 bg-background/95 text-muted-foreground opacity-0 shadow-sm transition hover:text-foreground group-hover/cell:opacity-100 group-focus-within/cell:opacity-100"
+				onclick={() => clearStatValue(stats, key, index)}
+			>
+				<XIcon class="size-3" />
+			</button>
+		{/if}
+		{#if cellImpact && state.filled && !state.invalid}
+			<div class="pointer-events-none absolute inset-x-1 bottom-0 h-0.5 overflow-hidden rounded-full bg-muted/50">
+				<div
+					class={`h-full rounded-full ${cellImpactRailClass(toneId, cellImpact.value)}`}
+					style={cellImpactRailStyle(cellImpact.value)}
+				></div>
+			</div>
+		{/if}
 	</div>
 {/snippet}
 
-{#snippet mobileStatsPanel(panelId: string, stats: UiStats)}
+{#snippet mobileStatsPanel(panelId: string, toneId: WorkbenchPanelId, stats: UiStats)}
 	<div class="border-t border-border/70">
 		<div class="grid grid-cols-[minmax(0,1fr)_6rem_4.75rem] bg-muted/60 text-xs font-medium text-muted-foreground">
 			<div class="px-3 py-2">Stat</div>
@@ -1185,29 +1656,49 @@
 					{group.label}
 				</div>
 				{#each group.keys as key}
-					<div class="flex min-h-10 items-center border-b border-border/70 px-3">
-						<Label
-							for={`${panelId}-${key}-flat`}
-							class="block min-w-0 truncate text-xs font-medium text-foreground/90"
-						>
-							{STAT_LABELS[key]}
-						</Label>
+					<div class="contents group/row">
+						<div class="flex min-h-10 items-center border-b border-border/70 px-3 transition-colors group-hover/row:bg-muted/25 group-focus-within/row:bg-muted/30">
+							<Label
+								for={statInputId(panelId, key, 0)}
+								class="block min-w-0 truncate text-xs font-medium text-foreground/90"
+							>
+								{STAT_LABELS[key]}
+							</Label>
+						</div>
+						{@render statInput(panelId, toneId, stats, key, 0)}
+						{#if PERCENTLESS_STATS.has(key)}
+							{@render lockedPercentCell(toneId)}
+						{:else}
+							{@render statInput(panelId, toneId, stats, key, 1)}
+						{/if}
 					</div>
-					{@render statInput(panelId, stats, key, 0)}
-					{#if PERCENTLESS_STATS.has(key)}
-						{@render emptyPercentCell()}
-					{:else}
-						{@render statInput(panelId, stats, key, 1)}
-					{/if}
 				{/each}
 			</div>
 		{/each}
 	</div>
 {/snippet}
 
-{#snippet emptyPercentCell()}
-	<div class="grid min-h-10 place-items-center border-b border-l border-border/70 bg-muted/30 text-xs text-muted-foreground">
-		-
+{#snippet lockedPercentCell(toneId: WorkbenchPanelId)}
+	<div
+		class={`grid min-h-10 place-items-center border-b border-l border-border/70 text-muted-foreground/70 transition-colors ${lockedCellClass(toneId)}`}
+		aria-label={`${panelLabel(toneId)} percent unavailable`}
+	>
+		<LockIcon class="size-3 opacity-0 transition-opacity group-hover/row:opacity-60 group-focus-within/row:opacity-60" />
+	</div>
+{/snippet}
+
+{#snippet workbenchImpactCell(row: WorkbenchImpactRow)}
+	<div class="grid min-h-10 grid-cols-[minmax(0,1fr)_4.75rem] items-center gap-2 border-b border-l border-r border-border/70 bg-background/45 px-2 py-1">
+		<div class="relative h-4 overflow-hidden rounded-sm bg-muted/70">
+			<div class="absolute left-1/2 top-0 h-full w-px bg-border"></div>
+			<div
+				class={`absolute top-1/2 h-2 -translate-y-1/2 rounded-sm ${deltaBarClass(row.delta)}`}
+				style={deltaBarStyle(row.delta, workbenchImpactScaleMax)}
+			></div>
+		</div>
+		<div class={`${deltaToneClass(row.delta)} truncate text-right text-[10px] font-medium tabular-nums`}>
+			{row.summary}
+		</div>
 	</div>
 {/snippet}
 
