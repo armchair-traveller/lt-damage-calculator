@@ -23,9 +23,12 @@
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import TargetIcon from '@lucide/svelte/icons/target';
-	import TrophyIcon from '@lucide/svelte/icons/trophy';
 	import UploadIcon from '@lucide/svelte/icons/upload';
 	import XIcon from '@lucide/svelte/icons/x';
+	import {
+		classifyDisplayedComparison,
+		isDisplayedTie
+	} from '$lib/calculator/comparison.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
@@ -104,7 +107,7 @@
 		{ id: 'normal', label: 'Normal' },
 		{ id: 'boss', label: 'Boss' }
 	] as const;
-	const SCORE_EPSILON = 0.0000000001;
+	const INPUT_EPSILON = 0.0000000001;
 	const MIN_DELTA_SCALE = 0.0001;
 
 	type ComparisonMetricId = (typeof COMPARISON_METRICS)[number]['id'];
@@ -139,10 +142,11 @@
 		margin: number;
 	};
 	type ChangeSummary = {
+		outcome: ComparisonSide | 'tie';
 		label: string;
 		value: string;
 		detail: string;
-		marginValueLabel: string;
+		stickyLabel: string;
 	};
 	type WorkbenchImpactRow = {
 		key: StatKey;
@@ -189,6 +193,8 @@
 	let focusedStatInput = $state('');
 	let draftStatInputs: Record<string, string> = $state({});
 	let equivalenceValues = $state({ perc: 1, critical: 10 });
+	let showStickyVerdict = $state(false);
+	const visiblePrimaryVerdicts = new Set<Element>();
 
 	const report = $derived(calculateDashboard(calculator));
 	const activeClassPreset = $derived(matchClassPreset(calculator.settings));
@@ -225,9 +231,18 @@
 			rawDamage: report.raw.buffedB.avg
 		}
 	] satisfies ComparisonPanelInput[]));
-	const changeSummary = $derived(summarizeChangeComparison(comparisonPanels));
-	const comparisonMatrixRows = $derived(buildComparisonMatrixRows(comparisonPanels));
-	const comparisonDeltas = $derived(buildComparisonDeltas(comparisonPanels));
+	const hasMeaningfulComparison = $derived(
+		panelHasMeaningfulChanges(calculator.statsA) || panelHasMeaningfulChanges(calculator.statsB)
+	);
+	const changeSummary = $derived(
+		hasMeaningfulComparison ? summarizeChangeComparison(comparisonPanels) : undefined
+	);
+	const comparisonMatrixRows = $derived(
+		hasMeaningfulComparison ? buildComparisonMatrixRows(comparisonPanels) : []
+	);
+	const comparisonDeltas = $derived(
+		hasMeaningfulComparison ? buildComparisonDeltas(comparisonPanels) : []
+	);
 	const comparisonDeltaScaleMax = $derived(
 		Math.max(MIN_DELTA_SCALE, ...comparisonDeltas.map((delta) => Math.abs(delta.value)))
 	);
@@ -406,11 +421,15 @@
 	function isNonZeroValue(value: string | undefined) {
 		const cleaned = cleanNumericText(value ?? '');
 		const parsed = Number(cleaned);
-		return Number.isFinite(parsed) && Math.abs(parsed) > SCORE_EPSILON;
+		return Number.isFinite(parsed) && Math.abs(parsed) > INPUT_EPSILON;
 	}
 
 	function panelHasEnteredValues(stats: UiStats) {
 		return STAT_KEYS.some((key) => hasInputValue(stats[key][0]) || hasInputValue(stats[key][1]));
+	}
+
+	function panelHasMeaningfulChanges(stats: UiStats) {
+		return STAT_KEYS.some((key) => isNonZeroValue(stats[key][0]) || isNonZeroValue(stats[key][1]));
 	}
 
 	function statInputId(panelId: string, key: StatKey, index: 0 | 1) {
@@ -481,7 +500,7 @@
 			cleaned,
 			displayValue: displayOverlayValue(value, panelId),
 			draftValue,
-			filled: Number.isFinite(numericValue) && Math.abs(numericValue) > SCORE_EPSILON,
+			filled: Number.isFinite(numericValue) && Math.abs(numericValue) > INPUT_EPSILON,
 			focused,
 			hasContent: draftValue !== '' || cleaned !== '',
 			invalid,
@@ -595,13 +614,13 @@
 	}
 
 	function cellImpactRailClass(panelId: WorkbenchPanelId, value: number) {
-		if (!Number.isFinite(value) || Math.abs(value) < SCORE_EPSILON) return 'bg-muted-foreground/45';
+		if (!Number.isFinite(value) || isDisplayedTie(value)) return 'bg-muted-foreground/45';
 		if (value < 0) return 'bg-destructive';
 		return panelId === 'b' ? 'bg-chart-4' : 'bg-chart-2';
 	}
 
 	function cellImpactRailStyle(value: number) {
-		if (!Number.isFinite(value) || Math.abs(value) < SCORE_EPSILON) return 'width: 0%;';
+		if (!Number.isFinite(value) || isDisplayedTie(value)) return 'width: 0%;';
 		const width = Math.max(6, Math.min(100, (Math.abs(value) / workbenchCellImpactScaleMax) * 100)).toFixed(2);
 		return `width: ${width}%;`;
 	}
@@ -632,14 +651,8 @@
 				isNonZeroValue(state.statsA[key][1]) ||
 				isNonZeroValue(state.statsB[key][0]) ||
 				isNonZeroValue(state.statsB[key][1]);
-			const winner =
-				!hasInput || (!Number.isFinite(aImpact) && !Number.isFinite(bImpact))
-					? 'empty'
-					: Math.abs(delta) < SCORE_EPSILON
-						? 'tie'
-						: delta > 0
-							? 'a'
-							: 'b';
+			const comparison = classifyDisplayedComparison(aImpact, bImpact, hasInput);
+			const winner = comparison === 'none' ? 'empty' : comparison;
 			const winningImpact = winner === 'a' ? aImpact : winner === 'b' ? bImpact : Number.NaN;
 
 			return {
@@ -742,6 +755,7 @@
 
 	function formatPointDeltaValue(value: number) {
 		if (!Number.isFinite(value)) return '---';
+		if (isDisplayedTie(value)) return '0.000';
 		const sign = value > 0 ? '+' : '';
 		return `${sign}${(value * 100).toFixed(3)}`;
 	}
@@ -760,16 +774,19 @@
 		);
 		const leader = sorted[0];
 		const runnerUp = sorted[1];
-		const bestScore = sortableScore(leader?.rawIncrease ?? Number.NaN);
-		const runnerUpScore = sortableScore(runnerUp?.rawIncrease ?? Number.NaN);
-		const isTie = runnerUp ? Math.abs(bestScore - runnerUpScore) < SCORE_EPSILON : false;
+		const isTie =
+			leader && runnerUp
+				? classifyDisplayedComparison(leader.rawIncrease, runnerUp.rawIncrease) === 'tie'
+				: false;
 
 		return panels.map((panel) => {
 			const rank = sorted.findIndex((candidate) => candidate === panel) + 1;
-			const panelScore = sortableScore(panel.rawIncrease);
 			const isLeader = panel === leader;
 			const isBest = isLeader && !isTie;
-			const isTiedBest = isTie && Math.abs(panelScore - bestScore) < SCORE_EPSILON;
+			const isTiedBest =
+				Boolean(leader) &&
+				isTie &&
+				classifyDisplayedComparison(panel.rawIncrease, leader.rawIncrease) === 'tie';
 			const comparisonTarget = isLeader ? runnerUp : leader;
 			const margin =
 				comparisonTarget && Number.isFinite(panel.rawIncrease) && Number.isFinite(comparisonTarget.rawIncrease)
@@ -793,19 +810,23 @@
 		if (!leader) return undefined;
 		if (leaders.length > 1) {
 			return {
-				label: 'A/B tied',
+				outcome: 'tie',
+				label: 'A and B are even overall',
 				value: leader.buffedIncrease.avg,
-				detail: 'Same average buffed gain',
-				marginValueLabel: ''
+				detail: 'Same weighted average gain',
+				stickyLabel: 'A = B'
 			};
 		}
 
 		const other = panels.find((panel) => panel.id !== leader.id);
 		return {
-			label: `${leader.shortLabel} best`,
+			outcome: leader.id,
+			label: `${leader.shortLabel} leads overall`,
 			value: leader.buffedIncrease.avg,
-			detail: other ? `${leader.shortLabel} leads ${other.shortLabel} by` : '',
-			marginValueLabel: other ? leader.marginValueLabel : ''
+			detail: other ? `${leader.marginValueLabel} pp over ${other.shortLabel}` : 'Weighted average leader',
+			stickyLabel: other
+				? `${leader.shortLabel} leads ${leader.marginValueLabel} pp`
+				: `${leader.shortLabel} leads`
 		};
 	}
 
@@ -816,9 +837,11 @@
 		const a = panels.find((panel) => panel.id === 'a');
 		const b = panels.find((panel) => panel.id === 'b');
 		if (!a || !b) return undefined;
-		const delta = sortableScore(a.rawBuffedIncrease[metric]) - sortableScore(b.rawBuffedIncrease[metric]);
-		if (Math.abs(delta) < SCORE_EPSILON) return 'tie';
-		return delta > 0 ? 'a' : 'b';
+		const comparison = classifyDisplayedComparison(
+			a.rawBuffedIncrease[metric],
+			b.rawBuffedIncrease[metric]
+		);
+		return comparison === 'none' ? undefined : comparison;
 	}
 
 	function buildComparisonMatrixRows(panels: RankedComparisonPanel[]) {
@@ -854,26 +877,70 @@
 		});
 	}
 
-	function metricCellClass(isWinner: boolean) {
-		return isWinner
+	function metricCellClass(side: ComparisonSide, isWinner: boolean) {
+		if (!isWinner) return 'border-border/70 bg-background/55';
+		return side === 'a'
 			? 'border-chart-2/60 bg-chart-2/10'
-			: 'border-border/70 bg-background/55';
+			: 'border-chart-4/60 bg-chart-4/10';
+	}
+
+	function verdictBandClass(outcome: ChangeSummary['outcome']) {
+		if (outcome === 'a') return 'border-chart-2/50 bg-chart-2/10';
+		if (outcome === 'b') return 'border-chart-4/50 bg-chart-4/10';
+		return 'border-border/80 bg-muted/35';
+	}
+
+	function verdictBadgeClass(outcome: ChangeSummary['outcome']) {
+		if (outcome === 'a') return 'border-chart-2/60 bg-chart-2/10';
+		if (outcome === 'b') return 'border-chart-4/60 bg-chart-4/10';
+		return 'border-border/80 bg-muted/60';
+	}
+
+	function verdictLabelClass(outcome: ChangeSummary['outcome']) {
+		if (outcome === 'a') return 'text-chart-2';
+		if (outcome === 'b') return 'text-chart-4';
+		return 'text-foreground';
 	}
 
 	function deltaToneClass(value: number) {
-		if (!Number.isFinite(value) || Math.abs(value) < SCORE_EPSILON) return 'text-muted-foreground';
+		if (!Number.isFinite(value) || isDisplayedTie(value)) return 'text-muted-foreground';
 		return value > 0 ? 'text-chart-2' : 'text-chart-4';
 	}
 
 	function deltaBarClass(value: number) {
-		if (!Number.isFinite(value) || Math.abs(value) < SCORE_EPSILON) return 'bg-muted-foreground/50';
+		if (!Number.isFinite(value) || isDisplayedTie(value)) return 'bg-muted-foreground/50';
 		return value > 0 ? 'bg-chart-2' : 'bg-chart-4';
 	}
 
 	function deltaBarStyle(value: number, max: number) {
-		if (!Number.isFinite(value) || Math.abs(value) < SCORE_EPSILON || max <= 0) return 'left: 50%; width: 0%;';
+		if (!Number.isFinite(value) || isDisplayedTie(value) || max <= 0) return 'left: 50%; width: 0%;';
 		const width = Math.min(50, (Math.abs(value) / max) * 50).toFixed(2);
 		return value > 0 ? `left: 50%; width: ${width}%;` : `right: 50%; width: ${width}%;`;
+	}
+
+	function syncStickyVerdict() {
+		showStickyVerdict = Boolean(changeSummary) && visiblePrimaryVerdicts.size === 0;
+	}
+
+	function observePrimaryVerdict(node: HTMLElement) {
+		if (!browser) return {};
+		const observer = new IntersectionObserver(
+			([entry]) => {
+				if (entry.isIntersecting) visiblePrimaryVerdicts.add(node);
+				else visiblePrimaryVerdicts.delete(node);
+				syncStickyVerdict();
+			},
+			{ threshold: 0.01 }
+		);
+
+		observer.observe(node);
+		return {
+			destroy() {
+				visiblePrimaryVerdicts.delete(node);
+				observer.disconnect();
+				syncStickyVerdict();
+			}
+		};
 	}
 
 	function scrollToSection(id: string) {
@@ -950,9 +1017,9 @@
 							<SparklesIcon data-icon="inline-start" />
 							{formatDisplayIncrease(report.raw.buffIncrease.avg)}
 						</Badge>
-						{#if changeSummary}
-							<Badge variant="outline" class="border-chart-2/60 bg-chart-2/10">
-								{changeSummary.label} {changeSummary.value}
+						{#if showStickyVerdict && changeSummary}
+							<Badge variant="outline" class={verdictBadgeClass(changeSummary.outcome)}>
+								{changeSummary.stickyLabel}
 							</Badge>
 						{/if}
 
@@ -1027,11 +1094,6 @@
 				<div class="flex min-w-0 flex-wrap items-center gap-2">
 					<BarChart3Icon class="size-4 text-primary" />
 					<h2 class="text-sm font-semibold">Stat Workbench</h2>
-					{#if changeSummary}
-						<Badge variant="outline" class="border-chart-2/60 bg-chart-2/10 text-[11px]">
-							{changeSummary.label} {changeSummary.value}
-						</Badge>
-					{/if}
 				</div>
 				<Tooltip.Provider delayDuration={120}>
 					<div class="flex flex-wrap items-center gap-2">
@@ -1106,33 +1168,33 @@
 				</Tooltip.Provider>
 			</div>
 
-			<div class="md:hidden">
-				<div class="m-3 mb-0 rounded-md border border-border/70 bg-background/60 p-3">
-					<div class="flex items-center justify-between gap-3">
-						<div class="text-xs font-semibold">A/B comparison</div>
-						{#if changeSummary}
-							<Badge variant="outline" class="border-chart-2/60 bg-chart-2/10 text-[11px]">
-								{changeSummary.label}
-							</Badge>
-						{:else}
-							<Badge variant="outline" class="text-[11px]">Even</Badge>
-						{/if}
-					</div>
-					<div class="mt-2 grid grid-cols-2 gap-2 text-xs">
-						<div class="rounded-md border border-chart-2/40 bg-chart-2/10 px-2 py-1.5">
-							<div class="text-[10px] font-semibold text-chart-2">A</div>
-							<div class={`${activeTone(formatDisplayIncrease(report.raw.buffedIncreaseA.avg))} mt-0.5 truncate`}>
-								{formatDisplayIncrease(report.raw.buffedIncreaseA.avg)}
-							</div>
+			{#if changeSummary}
+				<div
+					use:observePrimaryVerdict
+					class={`grid grid-cols-2 gap-x-4 gap-y-2 border-b px-4 py-3 sm:grid-cols-[minmax(0,1fr)_8rem_8rem] sm:items-center xl:hidden ${verdictBandClass(changeSummary.outcome)}`}
+				>
+					<div class="col-span-2 min-w-0 sm:col-span-1">
+						<div class="text-xs font-semibold">{changeSummary.label}</div>
+						<div class={`mt-0.5 truncate text-[11px] tabular-nums ${verdictLabelClass(changeSummary.outcome)}`}>
+							{changeSummary.detail}
 						</div>
-						<div class="rounded-md border border-chart-4/40 bg-chart-4/10 px-2 py-1.5">
-							<div class="text-[10px] font-semibold text-chart-4">B</div>
-							<div class={`${activeTone(formatDisplayIncrease(report.raw.buffedIncreaseB.avg))} mt-0.5 truncate`}>
-								{formatDisplayIncrease(report.raw.buffedIncreaseB.avg)}
-							</div>
+					</div>
+					<div class="min-w-0 border-l border-chart-2/50 pl-3">
+						<div class="text-[10px] font-semibold text-chart-2">A weighted gain</div>
+						<div class={`${activeTone(formatDisplayIncrease(report.raw.buffedIncreaseA.avg))} mt-0.5 truncate text-xs`}>
+							{formatDisplayIncrease(report.raw.buffedIncreaseA.avg)}
+						</div>
+					</div>
+					<div class="min-w-0 border-l border-chart-4/50 pl-3">
+						<div class="text-[10px] font-semibold text-chart-4">B weighted gain</div>
+						<div class={`${activeTone(formatDisplayIncrease(report.raw.buffedIncreaseB.avg))} mt-0.5 truncate text-xs`}>
+							{formatDisplayIncrease(report.raw.buffedIncreaseB.avg)}
 						</div>
 					</div>
 				</div>
+			{/if}
+
+			<div class="md:hidden">
 				<Tabs.Tabs bind:value={mobileStatsTab}>
 					<Tabs.List class="m-3 grid w-[calc(100%-1.5rem)] grid-cols-3">
 						<Tabs.Trigger value="base">Base</Tabs.Trigger>
@@ -1226,44 +1288,27 @@
 					</div>
 					<Badge variant="outline">{report.formatted.base.avg}</Badge>
 				</div>
+				{#if changeSummary}
+					<div
+						use:observePrimaryVerdict
+						class={`hidden border-b px-4 py-3 xl:block ${verdictBandClass(changeSummary.outcome)}`}
+					>
+						<div class="flex items-start justify-between gap-3">
+							<div class="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
+								<ScaleIcon class={`size-3.5 shrink-0 ${verdictLabelClass(changeSummary.outcome)}`} />
+								<span class="truncate">{changeSummary.label}</span>
+							</div>
+							<span class={`${activeTone(changeSummary.value)} shrink-0 text-sm`}>
+								{changeSummary.value}
+							</span>
+						</div>
+						<div class={`mt-1 truncate text-[11px] tabular-nums ${verdictLabelClass(changeSummary.outcome)}`}>
+							{changeSummary.detail}
+						</div>
+					</div>
+				{/if}
 				<Tooltip.Provider delayDuration={120}>
 					<div class="space-y-4 p-4">
-						{#if changeSummary}
-							<div class="rounded-md border border-chart-2/50 bg-chart-2/10 p-3">
-								<div class="flex items-start justify-between gap-3">
-									<div class="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
-										<TrophyIcon class="size-3.5 shrink-0 text-chart-2" />
-										<span class="truncate">{changeSummary.label}</span>
-									</div>
-									<span class={`${activeTone(changeSummary.value)} shrink-0 text-sm`}>
-										{changeSummary.value}
-									</span>
-								</div>
-								<div class="mt-1 flex min-w-0 flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
-									<span class="truncate">{changeSummary.detail}</span>
-									{#if changeSummary.marginValueLabel}
-										<span class="inline-flex items-center gap-1 tabular-nums">
-											<span>{changeSummary.marginValueLabel}</span>
-											<Tooltip.Root>
-												<Tooltip.Trigger>
-													{#snippet child({ props })}
-														<button
-															{...props}
-															type="button"
-															class="cursor-help border-b border-dotted border-current leading-none"
-														>
-															pp
-														</button>
-													{/snippet}
-												</Tooltip.Trigger>
-												<Tooltip.Content side="top" sideOffset={6}>Percentage points</Tooltip.Content>
-											</Tooltip.Root>
-										</span>
-									{/if}
-								</div>
-							</div>
-						{/if}
-
 						<div class="grid grid-cols-2 gap-x-4 gap-y-3">
 							{@render valueBlock('Normal', report.formatted.base.normal)}
 							{@render valueBlock('Boss', report.formatted.base.boss)}
@@ -1271,82 +1316,84 @@
 							{@render valueBlock('Buffed Boss', report.formatted.buffed.boss)}
 						</div>
 
-						<div class="space-y-2 border-t border-border/80 pt-4">
-							<div class="flex items-center justify-between gap-3">
-								<div class="text-xs font-semibold">A/B comparison</div>
-								<div class="text-[11px] text-muted-foreground">Buffed gain</div>
-							</div>
-							<div class="grid grid-cols-[1.75rem_repeat(3,minmax(0,1fr))] gap-1 sm:grid-cols-[2.25rem_repeat(3,minmax(0,1fr))] sm:gap-1.5">
-								<div></div>
-								{#each COMPARISON_METRICS as metric}
-									<div class="px-0.5 text-center text-[11px] font-medium text-muted-foreground">
-										{metric.label}
-									</div>
-								{/each}
-								{#each comparisonMatrixRows as row}
-									<div class="grid place-items-center">
-										<Badge
-											variant="outline"
-											class={row.id === 'a'
-												? 'border-chart-2/50 bg-chart-2/10 px-1.5 text-foreground'
-												: 'border-chart-4/50 bg-chart-4/10 px-1.5 text-foreground'}
-										>
-											{row.label}
-										</Badge>
-									</div>
-									{#each row.metrics as cell}
-										<div
-											class={`min-w-0 rounded-md border px-1 py-1.5 text-center sm:px-2 ${metricCellClass(cell.isWinner)}`}
-										>
-											<div class={`${activeTone(cell.gain)} truncate text-[10px] leading-3 sm:text-xs sm:leading-4`}>
-												{cell.gain}
-											</div>
-											<div class="truncate text-[9px] leading-3 text-muted-foreground tabular-nums sm:text-[10px]">
-												{cell.damage}
-											</div>
+						{#if changeSummary}
+							<div class="space-y-2 border-t border-border/80 pt-4">
+								<div class="flex items-center justify-between gap-3">
+									<div class="text-xs font-semibold">A/B comparison</div>
+									<div class="text-[11px] text-muted-foreground">Buffed gain</div>
+								</div>
+								<div class="grid grid-cols-[1.75rem_repeat(3,minmax(0,1fr))] gap-1 sm:grid-cols-[2.25rem_repeat(3,minmax(0,1fr))] sm:gap-1.5">
+									<div></div>
+									{#each COMPARISON_METRICS as metric}
+										<div class="px-0.5 text-center text-[11px] font-medium text-muted-foreground">
+											{metric.label}
 										</div>
 									{/each}
+									{#each comparisonMatrixRows as row}
+										<div class="grid place-items-center">
+											<Badge
+												variant="outline"
+												class={row.id === 'a'
+													? 'border-chart-2/50 bg-chart-2/10 px-1.5 text-foreground'
+													: 'border-chart-4/50 bg-chart-4/10 px-1.5 text-foreground'}
+											>
+												{row.label}
+											</Badge>
+										</div>
+										{#each row.metrics as cell}
+											<div
+												class={`min-w-0 rounded-md border px-1 py-1.5 text-center sm:px-2 ${metricCellClass(row.id, cell.isWinner)}`}
+											>
+												<div class={`${activeTone(cell.gain)} truncate text-[10px] leading-3 sm:text-xs sm:leading-4`}>
+													{cell.gain}
+												</div>
+												<div class="truncate text-[9px] leading-3 text-muted-foreground tabular-nums sm:text-[10px]">
+													{cell.damage}
+												</div>
+											</div>
+										{/each}
+									{/each}
+								</div>
+							</div>
+
+							<div class="space-y-2 border-t border-border/80 pt-4">
+								<div class="flex items-center justify-between gap-3">
+									<div class="text-xs font-semibold">A vs B delta</div>
+									<div class="flex items-center gap-1 text-[11px] text-muted-foreground">
+										<span>A - B</span>
+										<Tooltip.Root>
+											<Tooltip.Trigger>
+												{#snippet child({ props })}
+													<button
+														{...props}
+														type="button"
+														class="cursor-help border-b border-dotted border-current leading-none"
+													>
+														pp
+													</button>
+												{/snippet}
+											</Tooltip.Trigger>
+											<Tooltip.Content side="top" sideOffset={6}>Percentage points</Tooltip.Content>
+										</Tooltip.Root>
+									</div>
+								</div>
+								{#each comparisonDeltas as delta}
+									<div class="grid grid-cols-[3.25rem_minmax(0,1fr)_5.75rem] items-center gap-2 text-xs">
+										<span class="truncate text-muted-foreground">{delta.label}</span>
+										<div class="relative h-4 overflow-hidden rounded-sm bg-muted/70">
+											<div class="absolute left-1/2 top-0 h-full w-px bg-border"></div>
+											<div
+												class={`absolute top-1/2 h-2 -translate-y-1/2 rounded-sm ${deltaBarClass(delta.value)}`}
+												style={deltaBarStyle(delta.value, comparisonDeltaScaleMax)}
+											></div>
+										</div>
+										<span class={`${deltaToneClass(delta.value)} text-right font-medium tabular-nums`}>
+											{delta.valueLabel}
+										</span>
+									</div>
 								{/each}
 							</div>
-						</div>
-
-						<div class="space-y-2 border-t border-border/80 pt-4">
-							<div class="flex items-center justify-between gap-3">
-								<div class="text-xs font-semibold">A vs B delta</div>
-								<div class="flex items-center gap-1 text-[11px] text-muted-foreground">
-									<span>A - B</span>
-									<Tooltip.Root>
-										<Tooltip.Trigger>
-											{#snippet child({ props })}
-												<button
-													{...props}
-													type="button"
-													class="cursor-help border-b border-dotted border-current leading-none"
-												>
-													pp
-												</button>
-											{/snippet}
-										</Tooltip.Trigger>
-										<Tooltip.Content side="top" sideOffset={6}>Percentage points</Tooltip.Content>
-									</Tooltip.Root>
-								</div>
-							</div>
-							{#each comparisonDeltas as delta}
-								<div class="grid grid-cols-[3.25rem_minmax(0,1fr)_5.75rem] items-center gap-2 text-xs">
-									<span class="truncate text-muted-foreground">{delta.label}</span>
-									<div class="relative h-4 overflow-hidden rounded-sm bg-muted/70">
-										<div class="absolute left-1/2 top-0 h-full w-px bg-border"></div>
-										<div
-											class={`absolute top-1/2 h-2 -translate-y-1/2 rounded-sm ${deltaBarClass(delta.value)}`}
-											style={deltaBarStyle(delta.value, comparisonDeltaScaleMax)}
-										></div>
-									</div>
-									<span class={`${deltaToneClass(delta.value)} text-right font-medium tabular-nums`}>
-										{delta.valueLabel}
-									</span>
-								</div>
-							{/each}
-						</div>
+						{/if}
 					</div>
 				</Tooltip.Provider>
 			</section>
