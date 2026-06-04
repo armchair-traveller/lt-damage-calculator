@@ -1444,7 +1444,7 @@
 					<div class="space-y-4 border-t border-border/80 pt-4">
 						{@render sliderControl('Summon', calculator.settings.summonWeight, 'summonWeight', 0, 1, 0.025)}
 						{@render sliderControl('Back/Melee', calculator.settings.backWeight, 'backWeight', 0, 1, 0.025)}
-						{@render sliderControl('Minimum', calculator.settings.minWeight, 'minWeight', 0, 0.5, 0.5)}
+						{@render binaryWeightControl('Minimum', calculator.settings.minWeight, 'minWeight', [0, 0.5])}
 						{@render sliderControl('Boss', calculator.settings.bossWeight, 'bossWeight', 0, 1, 0.025)}
 					</div>
 				</div>
@@ -1814,10 +1814,42 @@
 	</div>
 {/snippet}
 
+{#snippet binaryWeightControl(
+	label: string,
+	value: number,
+	key: 'minWeight',
+	options: number[]
+)}
+	<fieldset class="space-y-2">
+		<legend class="text-sm font-medium">{label}</legend>
+		<div class="grid grid-cols-2 rounded-md bg-muted p-1">
+			{#each options as option}
+				<label
+					class={`relative flex h-8 cursor-pointer items-center justify-center rounded-sm text-xs font-medium tabular-nums transition-all has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/30 ${
+						value === option
+							? 'bg-background text-foreground shadow-sm'
+							: 'text-muted-foreground hover:text-foreground'
+					}`}
+				>
+					<input
+						type="radio"
+						name={`parameter-${key}`}
+						value={option}
+						checked={value === option}
+						onchange={() => updateSlider(key, option)}
+						class="sr-only"
+					/>
+					{formatPercent(option)}
+				</label>
+			{/each}
+		</div>
+	</fieldset>
+{/snippet}
+
 {#snippet sliderControl(
 	label: string,
 	value: number,
-	key: 'summonWeight' | 'backWeight' | 'minWeight' | 'bossWeight',
+	key: 'summonWeight' | 'backWeight' | 'bossWeight',
 	min: number,
 	max: number,
 	step: number
