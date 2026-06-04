@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+	applyClassPreset,
 	calculateDashboard,
 	calculateEquivalenceTables,
 	createDefaultState,
+	matchClassPreset,
 	parseStoredState,
 	serializeState
 } from './model.js';
@@ -39,5 +41,23 @@ describe('LaTale damage model regression', () => {
 		expect.assertions(1);
 		const state = createDefaultState();
 		expect(parseStoredState(serializeState(state))).toEqual(state);
+	});
+
+	it('derives the matching class preset from active class factors', () => {
+		expect.assertions(6);
+		const defaults = createDefaultState().settings;
+		const applied = applyClassPreset(
+			{ ...defaults, target: 'soft', minWeight: 0.25, bossWeight: 0.7 },
+			'Hero (Greatsword)'
+		);
+
+		expect(matchClassPreset(defaults)).toBeUndefined();
+		expect(matchClassPreset(applied)).toBe('Hero (Greatsword)');
+		expect(matchClassPreset({ ...applied, aF: applied.aF + 1 })).toBeUndefined();
+		expect(matchClassPreset({ ...applied, aF: applied.aF + 0.0000000001 })).toBe('Hero (Greatsword)');
+		expect(matchClassPreset({ ...applied, target: '7k', minWeight: 0.5, bossWeight: 0.25 })).toBe(
+			'Hero (Greatsword)'
+		);
+		expect(applied).toMatchObject({ target: 'soft', minWeight: 0.25, bossWeight: 0.7 });
 	});
 });

@@ -2,10 +2,13 @@
 
 <script lang="ts">
 	import { browser } from '$app/environment';
+	import { tick } from 'svelte';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 	import BadgePercentIcon from '@lucide/svelte/icons/badge-percent';
 	import BarChart3Icon from '@lucide/svelte/icons/bar-chart-3';
+	import CheckIcon from '@lucide/svelte/icons/check';
+	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import ClipboardCopyIcon from '@lucide/svelte/icons/clipboard-copy';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
@@ -22,17 +25,18 @@
 	import TargetIcon from '@lucide/svelte/icons/target';
 	import TrophyIcon from '@lucide/svelte/icons/trophy';
 	import UploadIcon from '@lucide/svelte/icons/upload';
-	import WandSparklesIcon from '@lucide/svelte/icons/wand-sparkles';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
+	import * as Command from '$lib/components/ui/command/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import {
 		NativeSelect,
 		NativeSelectOption
 	} from '$lib/components/ui/native-select/index.js';
+	import * as Popover from '$lib/components/ui/popover/index.js';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { Slider } from '$lib/components/ui/slider/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
@@ -50,6 +54,7 @@
 		clearUiStats,
 		createDefaultState,
 		formatBuffStats,
+		matchClassPreset,
 		normalizeState,
 		numericStatsToUi,
 		parseStoredState,
@@ -170,7 +175,8 @@
 
 	let calculator: CalculatorState = $state(createDefaultState());
 	let hydrated = $state(false);
-	let selectedPreset = $state('Hero (Greatsword)');
+	let classPresetOpen = $state(false);
+	let classPresetTrigger: HTMLButtonElement | null = $state(null);
 	let buffsOpen = $state(false);
 	let equivalenceOpen = $state(false);
 	let auditOpen = $state(false);
@@ -185,6 +191,7 @@
 	let equivalenceValues = $state({ perc: 1, critical: 10 });
 
 	const report = $derived(calculateDashboard(calculator));
+	const activeClassPreset = $derived(matchClassPreset(calculator.settings));
 	const buffedUiStats = $derived(numericStatsToUi(report.buffedStats));
 	const equivalence = $derived(calculateEquivalenceTables(calculator, equivalenceValues));
 	const activeBuffCount = $derived(countActiveBuffs(calculator.selectedBuffs));
@@ -319,13 +326,15 @@
 
 	function resetAll() {
 		calculator = createDefaultState();
-		selectedPreset = 'Hero (Greatsword)';
 		transferStatus = 'Reset.';
 		clearAllStatDrafts();
 	}
 
-	function applySelectedPreset() {
-		calculator.settings = applyClassPreset(calculator.settings, selectedPreset);
+	async function selectClassPreset(presetName: string) {
+		calculator.settings = applyClassPreset(calculator.settings, presetName);
+		classPresetOpen = false;
+		await tick();
+		classPresetTrigger?.focus();
 	}
 
 	function updateSlider(key: 'summonWeight' | 'backWeight' | 'minWeight' | 'bossWeight', value: number) {
@@ -1349,17 +1358,51 @@
 				</div>
 				<div class="space-y-4 p-4">
 					<div class="space-y-2">
-						<Label for="class-preset">Class</Label>
-						<div class="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-							<NativeSelect id="class-preset" bind:value={selectedPreset} class="w-full">
-								{#each Object.keys(CLASS_PRESETS) as preset}
-									<NativeSelectOption value={preset}>{preset}</NativeSelectOption>
-								{/each}
-							</NativeSelect>
-							<Button variant="outline" aria-label="Apply class preset" onclick={applySelectedPreset}>
-								<WandSparklesIcon />
-							</Button>
-						</div>
+						<Label for="class-preset">Class preset</Label>
+						<Popover.Root bind:open={classPresetOpen}>
+							<Popover.Trigger>
+								{#snippet child({ props })}
+									<Button
+										{...props}
+										bind:ref={classPresetTrigger}
+										id="class-preset"
+										variant="outline"
+										role="combobox"
+										aria-expanded={classPresetOpen}
+										class="w-full justify-between px-3 font-normal"
+									>
+										<span class="truncate">{activeClassPreset ?? 'Custom'}</span>
+										<ChevronsUpDownIcon class="ml-2 size-4 shrink-0 text-muted-foreground" />
+									</Button>
+								{/snippet}
+							</Popover.Trigger>
+							<Popover.Content
+								align="start"
+								sideOffset={6}
+								class="w-[var(--bits-popover-anchor-width)] max-w-[calc(100vw-2rem)] rounded-md p-0"
+							>
+								<Command.Root label="Class presets" class="rounded-md">
+									<Command.Input placeholder="Search class presets..." />
+									<Command.List class="max-h-64">
+										<Command.Empty>No class found.</Command.Empty>
+										<Command.Group>
+											{#each Object.keys(CLASS_PRESETS) as preset}
+												<Command.Item
+													value={preset}
+													class="[&_.cn-command-item-indicator]:hidden"
+													onSelect={() => selectClassPreset(preset)}
+												>
+													<span class="min-w-0 flex-1 truncate">{preset}</span>
+													<CheckIcon
+														class={`ml-auto size-4 shrink-0 ${activeClassPreset === preset ? 'opacity-100' : 'opacity-0'}`}
+													/>
+												</Command.Item>
+											{/each}
+										</Command.Group>
+									</Command.List>
+								</Command.Root>
+							</Popover.Content>
+						</Popover.Root>
 					</div>
 
 					<div class="grid grid-cols-2 gap-2">

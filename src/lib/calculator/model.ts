@@ -130,6 +130,9 @@ export const CLASS_PRESETS = classPresets as Record<
 	Pick<Settings, 'aF' | 'sF' | 'fF' | 'summonWeight' | 'backWeight'>
 >;
 
+const CLASS_PRESET_KEYS = ['aF', 'sF', 'fF', 'summonWeight', 'backWeight'] as const;
+const CLASS_PRESET_TOLERANCE = 0.000000001;
+
 const TIER_DEFAULTS: Record<string, Record<string, string>> = {
 	Minimal: {
 		Food: 'Chicken Soup',
@@ -290,6 +293,14 @@ export function applyQuickPreset(settings: Settings, preset: (typeof QUICK_FACTO
 export function applyClassPreset(settings: Settings, presetName: string): Settings {
 	const preset = CLASS_PRESETS[presetName];
 	return preset ? { ...settings, ...preset } : settings;
+}
+
+export function matchClassPreset(settings: Settings): string | undefined {
+	return Object.entries(CLASS_PRESETS).find(([, preset]) =>
+		CLASS_PRESET_KEYS.every(
+			(key) => Math.abs(Number(settings[key]) - preset[key]) <= CLASS_PRESET_TOLERANCE
+		)
+	)?.[0];
 }
 
 export function toggleBuffTier(selectedBuffs: SelectedBuffs, tierName: string): SelectedBuffs {
