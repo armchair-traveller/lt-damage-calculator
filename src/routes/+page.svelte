@@ -2,8 +2,8 @@
 
 <script lang="ts">
 	import { browser } from '$app/environment';
+	import favicon from '$lib/assets/favicon.ico';
 	import { tick } from 'svelte';
-	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 	import BadgePercentIcon from '@lucide/svelte/icons/badge-percent';
 	import BarChart3Icon from '@lucide/svelte/icons/bar-chart-3';
@@ -994,9 +994,7 @@
 		<div class="mx-auto flex max-w-[1760px] flex-col gap-3 px-4 py-3 lg:px-6">
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<div class="flex min-w-0 items-center gap-3">
-					<div class="grid size-10 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground shadow-sm">
-						<ActivityIcon class="size-5" />
-					</div>
+					<img src={favicon} alt="" class="size-10 shrink-0 rounded-md object-contain shadow-sm" />
 					<div class="min-w-0">
 						<h1 class="truncate text-lg font-semibold">LaTale Damage Calculator</h1>
 						<div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
