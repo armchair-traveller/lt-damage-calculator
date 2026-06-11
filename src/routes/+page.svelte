@@ -334,8 +334,12 @@
 	}
 
 	function clearPanel(panelId: 'a' | 'b') {
-		if (panelId === 'a') calculator.statsA = clearUiStats();
-		if (panelId === 'b') calculator.statsB = clearUiStats();
+		const stats = panelId === 'a' ? calculator.statsA : calculator.statsB;
+		const blankStats = clearUiStats();
+		for (const key of STAT_KEYS) {
+			stats[key][0] = blankStats[key][0];
+			stats[key][1] = blankStats[key][1];
+		}
 		clearDraftsForPanel(panelId);
 	}
 
