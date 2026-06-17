@@ -9,14 +9,19 @@
 	import BarChart3Icon from '@lucide/svelte/icons/bar-chart-3';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+	import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import ClipboardCopyIcon from '@lucide/svelte/icons/clipboard-copy';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
+	import FileImageIcon from '@lucide/svelte/icons/file-image';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
+	import ImageUpIcon from '@lucide/svelte/icons/image-up';
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import LockIcon from '@lucide/svelte/icons/lock';
+	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ScaleIcon from '@lucide/svelte/icons/scale';
@@ -29,6 +34,11 @@
 		classifyDisplayedComparison,
 		isDisplayedTie
 	} from '$lib/calculator/comparison.js';
+	import {
+		findMissingImportedStats,
+		mergeImportedStats,
+		type ScreenshotImportResult
+	} from '$lib/calculator/importer.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
@@ -109,10 +119,13 @@
 	] as const;
 	const INPUT_EPSILON = 0.0000000001;
 	const MIN_DELTA_SCALE = 0.0001;
+	const SCREENSHOT_ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+	const SCREENSHOT_MAX_BYTES = 8 * 1024 * 1024;
 
 	type ComparisonMetricId = (typeof COMPARISON_METRICS)[number]['id'];
 	type ComparisonSide = 'a' | 'b';
 	type WorkbenchPanelId = 'base' | ComparisonSide;
+	type ScreenshotImportStatus = 'idle' | 'ready' | 'loading' | 'success' | 'error';
 	type MetricValues<T> = Record<ComparisonMetricId, T>;
 	type ComparisonRank = {
 		rank: number;
@@ -185,8 +198,15 @@
 	let equivalenceOpen = $state(false);
 	let auditOpen = $state(false);
 	let transferOpen = $state(false);
+	let screenshotImportOpen = $state(false);
 	let transferText = $state('');
 	let transferStatus = $state('');
+	let screenshotImportFile: File | null = $state<File | null>(null);
+	let screenshotImportFileInput: HTMLInputElement | null = $state<HTMLInputElement | null>(null);
+	let screenshotImportPreviewUrl = $state('');
+	let screenshotImportStatus: ScreenshotImportStatus = $state<ScreenshotImportStatus>('idle');
+	let screenshotImportMessage = $state('');
+	let screenshotImportResult: ScreenshotImportResult | null = $state<ScreenshotImportResult | null>(null);
 	let buffQuery = $state('');
 	let equivalenceTab = $state('damage');
 	let mobileStatsTab = $state('base');
@@ -265,6 +285,22 @@
 	);
 	const hasAChanges = $derived(panelHasEnteredValues(calculator.statsA));
 	const hasBChanges = $derived(panelHasEnteredValues(calculator.statsB));
+	const screenshotImportMissing = $derived(
+		screenshotImportResult ? findMissingImportedStats(screenshotImportResult.stats) : []
+	);
+	const screenshotImportRows = $derived.by(() => {
+		const result = screenshotImportResult;
+		if (!result) return [];
+		return STAT_KEYS.map((key) => ({
+			key,
+			label: STAT_LABELS[key],
+			values: result.stats[key] ?? ['', ''],
+			missing: screenshotImportMissing.includes(key)
+		}));
+	});
+	const screenshotImportCanApply = $derived(
+		Boolean(screenshotImportResult && screenshotImportMissing.length === 0 && screenshotImportStatus !== 'loading')
+	);
 
 	$effect(() => {
 		if (!browser || hydrated) return;
@@ -281,6 +317,13 @@
 	$effect(() => {
 		if (!browser || !hydrated) return;
 		window.localStorage.setItem(STORAGE_KEY, serializeState(calculator));
+	});
+
+	$effect(() => {
+		const previewUrl = screenshotImportPreviewUrl;
+		return () => {
+			if (previewUrl) URL.revokeObjectURL(previewUrl);
+		};
 	});
 
 	function readLegacyState() {
@@ -379,6 +422,135 @@
 		if (!browser || !transferText) return;
 		await navigator.clipboard.writeText(transferText);
 		transferStatus = 'Copied.';
+	}
+
+	function resetScreenshotImport() {
+		screenshotImportFile = null;
+		screenshotImportPreviewUrl = '';
+		screenshotImportStatus = 'idle';
+		screenshotImportMessage = '';
+		screenshotImportResult = null;
+		if (screenshotImportFileInput) screenshotImportFileInput.value = '';
+	}
+
+	function handleScreenshotFileChange(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		selectScreenshotFile(input.files?.[0] ?? null);
+	}
+
+	function selectScreenshotFile(file: File | null) {
+		screenshotImportResult = null;
+		screenshotImportMessage = '';
+
+		if (!file) {
+			resetScreenshotImport();
+			return;
+		}
+
+		if (!isAcceptedScreenshotFile(file)) {
+			screenshotImportFile = null;
+			screenshotImportPreviewUrl = '';
+			screenshotImportStatus = 'error';
+			screenshotImportMessage = 'Use a PNG, JPEG, WEBP, or non-animated GIF.';
+			if (screenshotImportFileInput) screenshotImportFileInput.value = '';
+			return;
+		}
+
+		if (file.size > SCREENSHOT_MAX_BYTES) {
+			screenshotImportFile = null;
+			screenshotImportPreviewUrl = '';
+			screenshotImportStatus = 'error';
+			screenshotImportMessage = 'Use an image smaller than 8 MB.';
+			if (screenshotImportFileInput) screenshotImportFileInput.value = '';
+			return;
+		}
+
+		screenshotImportFile = file;
+		screenshotImportPreviewUrl = browser ? URL.createObjectURL(file) : '';
+		screenshotImportStatus = 'ready';
+		screenshotImportMessage = `${file.name} (${formatFileSize(file.size)})`;
+	}
+
+	async function runScreenshotImport() {
+		if (!screenshotImportFile) {
+			screenshotImportStatus = 'error';
+			screenshotImportMessage = 'Choose a screenshot first.';
+			return;
+		}
+
+		screenshotImportStatus = 'loading';
+		screenshotImportMessage = 'Reading screenshot...';
+		screenshotImportResult = null;
+
+		try {
+			const formData = new FormData();
+			formData.set('screenshot', screenshotImportFile);
+			const response = await fetch('/api/import-stats', {
+				method: 'POST',
+				body: formData
+			});
+			const body = await response.json().catch(() => ({}));
+			if (!response.ok) {
+				throw new Error(typeof body.message === 'string' ? body.message : 'Screenshot import failed.');
+			}
+
+			const result = body as ScreenshotImportResult;
+			const missing = findMissingImportedStats(result.stats);
+			screenshotImportResult = result;
+
+			if (missing.length > 0) {
+				screenshotImportStatus = 'error';
+				screenshotImportMessage = 'Incomplete extraction.';
+				return;
+			}
+
+			screenshotImportStatus = 'success';
+			screenshotImportMessage = result.confidence < 0.65 ? 'Low confidence. Review values.' : 'Review values.';
+		} catch (error) {
+			screenshotImportStatus = 'error';
+			screenshotImportMessage = error instanceof Error ? error.message : 'Screenshot import failed.';
+		}
+	}
+
+	function applyScreenshotImport() {
+		if (!screenshotImportResult) return;
+		if (screenshotImportMissing.length > 0) {
+			screenshotImportStatus = 'error';
+			screenshotImportMessage = 'Incomplete extraction.';
+			return;
+		}
+
+		calculator.stats = mergeImportedStats(calculator.stats, screenshotImportResult.stats);
+		clearDraftsForPanel('base');
+		screenshotImportStatus = 'success';
+		screenshotImportMessage = 'Applied to base stats.';
+	}
+
+	function isAcceptedScreenshotFile(file: File) {
+		if (SCREENSHOT_ACCEPTED_TYPES.has(file.type)) return true;
+		const extension = file.name.split('.').pop()?.toLowerCase();
+		return (
+			extension === 'png' ||
+			extension === 'jpg' ||
+			extension === 'jpeg' ||
+			extension === 'webp' ||
+			extension === 'gif'
+		);
+	}
+
+	function formatFileSize(size: number) {
+		if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+		return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+	}
+
+	function formatImportConfidence(confidence: number) {
+		return `${Math.round(confidence * 100)}%`;
+	}
+
+	function screenshotPreviewValue(key: StatKey, value: string, index: 0 | 1) {
+		if (!value) return '---';
+		const displayed = displayOverlayValue(value, 'base');
+		return index === 1 && !PERCENTLESS_STATS.has(key) ? `${displayed}%` : displayed;
 	}
 
 	function setBuffs(next: SelectedBuffs) {
@@ -1106,6 +1278,23 @@
 										{...props}
 										variant="outline"
 										size="icon-sm"
+										aria-label="Import screenshot"
+										onclick={() => (screenshotImportOpen = true)}
+									>
+										<ImageUpIcon />
+									</Button>
+								{/snippet}
+							</Tooltip.Trigger>
+							<Tooltip.Content side="bottom" sideOffset={6}>Import screenshot</Tooltip.Content>
+						</Tooltip.Root>
+						<div class="h-6 w-px bg-border/80"></div>
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								{#snippet child({ props })}
+									<Button
+										{...props}
+										variant="outline"
+										size="icon-sm"
 										aria-label="Copy A to B"
 										class="relative"
 										disabled={!hasAChanges}
@@ -1704,6 +1893,135 @@
 					{/each}
 				</div>
 			</section>
+		</div>
+	</Sheet.Content>
+</Sheet.Root>
+
+<Sheet.Root bind:open={screenshotImportOpen}>
+	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,38rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
+		<Sheet.Header class="border-b border-border/80 px-5 py-4">
+			<Sheet.Title>Import Screenshot</Sheet.Title>
+		</Sheet.Header>
+
+		<div class="space-y-4 p-5">
+			<div class="space-y-2">
+				<Label for="screenshot-import-file">Screenshot</Label>
+				<Input
+					bind:ref={screenshotImportFileInput}
+					id="screenshot-import-file"
+					type="file"
+					accept="image/png,image/jpeg,image/webp,image/gif"
+					disabled={screenshotImportStatus === 'loading'}
+					onchange={handleScreenshotFileChange}
+				/>
+			</div>
+
+			{#if screenshotImportPreviewUrl}
+				<div class="overflow-hidden rounded-md border border-border bg-muted/20">
+					<img
+						src={screenshotImportPreviewUrl}
+						alt={screenshotImportFile?.name ?? 'Selected screenshot'}
+						class="max-h-72 w-full object-contain"
+					/>
+				</div>
+			{:else}
+				<div class="grid min-h-32 place-items-center rounded-md border border-dashed border-border bg-muted/20 text-muted-foreground">
+					<FileImageIcon class="size-8" />
+				</div>
+			{/if}
+
+			<div class="flex flex-wrap gap-2">
+				<Button onclick={runScreenshotImport} disabled={!screenshotImportFile || screenshotImportStatus === 'loading'}>
+					{#if screenshotImportStatus === 'loading'}
+						<LoaderCircleIcon data-icon="inline-start" class="animate-spin" />
+					{:else}
+						<CloudUploadIcon data-icon="inline-start" />
+					{/if}
+					Import
+				</Button>
+				<Button variant="outline" onclick={resetScreenshotImport} disabled={screenshotImportStatus === 'loading'}>
+					<EraserIcon data-icon="inline-start" />
+					Clear
+				</Button>
+			</div>
+
+			{#if screenshotImportMessage}
+				<div
+					class={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${
+						screenshotImportStatus === 'error'
+							? 'border-destructive/40 bg-destructive/10 text-destructive'
+							: 'border-border bg-muted/25 text-muted-foreground'
+					}`}
+				>
+					{#if screenshotImportStatus === 'error'}
+						<CircleAlertIcon class="mt-0.5 size-4 shrink-0" />
+					{:else}
+						<FileImageIcon class="mt-0.5 size-4 shrink-0" />
+					{/if}
+					<span class="min-w-0">{screenshotImportMessage}</span>
+				</div>
+			{/if}
+
+			{#if screenshotImportResult}
+				<div class="flex flex-wrap items-center gap-2">
+					<Badge variant="secondary">{screenshotImportResult.variant}</Badge>
+					<Badge variant="outline">Confidence {formatImportConfidence(screenshotImportResult.confidence)}</Badge>
+					{#if screenshotImportMissing.length > 0}
+						<Badge variant="destructive">{screenshotImportMissing.length} missing</Badge>
+					{/if}
+				</div>
+
+				{#if screenshotImportResult.warnings.length > 0}
+					<div class="space-y-1 rounded-md border border-border bg-muted/25 p-3">
+						{#each screenshotImportResult.warnings as warning}
+							<div class="flex items-start gap-2 text-xs text-muted-foreground">
+								<CircleAlertIcon class="mt-0.5 size-3.5 shrink-0" />
+								<span class="min-w-0">{warning}</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+
+				<div class="overflow-hidden rounded-md border border-border">
+					<Table.Root>
+						<Table.Header>
+							<Table.Row>
+								<Table.Head>Stat</Table.Head>
+								<Table.Head class="text-right">Flat</Table.Head>
+								<Table.Head class="text-right">%</Table.Head>
+							</Table.Row>
+						</Table.Header>
+						<Table.Body>
+							{#each screenshotImportRows as row}
+								<Table.Row class={row.missing ? 'bg-destructive/5' : ''}>
+									<Table.Cell class="font-medium">{row.label}</Table.Cell>
+									<Table.Cell class={`text-right tabular-nums ${row.values[0] ? '' : 'text-destructive'}`}>
+										{screenshotPreviewValue(row.key, row.values[0], 0)}
+									</Table.Cell>
+									<Table.Cell
+										class={`text-right tabular-nums ${
+											PERCENTLESS_STATS.has(row.key) || row.values[1] ? 'text-muted-foreground' : 'text-destructive'
+										}`}
+									>
+										{#if PERCENTLESS_STATS.has(row.key)}
+											---
+										{:else}
+											{screenshotPreviewValue(row.key, row.values[1], 1)}
+										{/if}
+									</Table.Cell>
+								</Table.Row>
+							{/each}
+						</Table.Body>
+					</Table.Root>
+				</div>
+
+				<div class="flex flex-wrap gap-2">
+					<Button onclick={applyScreenshotImport} disabled={!screenshotImportCanApply}>
+						<CheckIcon data-icon="inline-start" />
+						Apply to Base
+					</Button>
+				</div>
+			{/if}
 		</div>
 	</Sheet.Content>
 </Sheet.Root>
