@@ -10,6 +10,7 @@
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+	import ClipboardPasteIcon from '@lucide/svelte/icons/clipboard-paste';
 	import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import ClipboardCopyIcon from '@lucide/svelte/icons/clipboard-copy';
@@ -207,6 +208,9 @@
 	let screenshotImportStatus: ScreenshotImportStatus = $state<ScreenshotImportStatus>('idle');
 	let screenshotImportMessage = $state('');
 	let screenshotImportResult: ScreenshotImportResult | null = $state<ScreenshotImportResult | null>(null);
+	let screenshotImportDragActive = $state(false);
+	let screenshotImportApplyNotice = $state('');
+	let screenshotImportApplyNoticeTimeout: number | null = null;
 	let buffQuery = $state('');
 	let equivalenceTab = $state('damage');
 	let mobileStatsTab = $state('base');
@@ -301,6 +305,14 @@
 	const screenshotImportCanApply = $derived(
 		Boolean(screenshotImportResult && screenshotImportMissing.length === 0 && screenshotImportStatus !== 'loading')
 	);
+	const screenshotImportHasReviewWarning = $derived(
+		Boolean(
+			screenshotImportResult &&
+				(screenshotImportResult.confidence < 0.65 ||
+					screenshotImportResult.warnings.length > 0 ||
+					screenshotImportMissing.length > 0)
+		)
+	);
 
 	$effect(() => {
 		if (!browser || hydrated) return;
@@ -323,6 +335,15 @@
 		const previewUrl = screenshotImportPreviewUrl;
 		return () => {
 			if (previewUrl) URL.revokeObjectURL(previewUrl);
+		};
+	});
+
+	$effect(() => {
+		if (!browser) return;
+		return () => {
+			if (screenshotImportApplyNoticeTimeout !== null) {
+				window.clearTimeout(screenshotImportApplyNoticeTimeout);
+			}
 		};
 	});
 
@@ -389,6 +410,7 @@
 	function resetAll() {
 		calculator = createDefaultState();
 		transferStatus = 'Reset.';
+		clearScreenshotImportApplyNotice();
 		clearAllStatDrafts();
 	}
 
@@ -430,6 +452,7 @@
 		screenshotImportStatus = 'idle';
 		screenshotImportMessage = '';
 		screenshotImportResult = null;
+		screenshotImportDragActive = false;
 		if (screenshotImportFileInput) screenshotImportFileInput.value = '';
 	}
 
@@ -438,9 +461,80 @@
 		selectScreenshotFile(input.files?.[0] ?? null);
 	}
 
+	function openScreenshotFilePicker() {
+		if (screenshotImportStatus === 'loading') return;
+		screenshotImportFileInput?.click();
+	}
+
+	function handleScreenshotImportZoneKeydown(event: KeyboardEvent) {
+		if (event.key !== 'Enter' && event.key !== ' ') return;
+		event.preventDefault();
+		openScreenshotFilePicker();
+	}
+
+	function handleScreenshotDragEnter(event: DragEvent) {
+		if (screenshotImportStatus === 'loading' || !hasDraggedFiles(event.dataTransfer)) return;
+		event.preventDefault();
+		screenshotImportDragActive = true;
+	}
+
+	function handleScreenshotDragOver(event: DragEvent) {
+		if (screenshotImportStatus === 'loading' || !hasDraggedFiles(event.dataTransfer)) return;
+		event.preventDefault();
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+		screenshotImportDragActive = true;
+	}
+
+	function handleScreenshotDragLeave(event: DragEvent) {
+		const nextTarget = event.relatedTarget;
+		if (nextTarget instanceof Node && event.currentTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+			return;
+		}
+		screenshotImportDragActive = false;
+	}
+
+	function handleScreenshotDrop(event: DragEvent) {
+		if (screenshotImportStatus === 'loading') return;
+		event.preventDefault();
+		screenshotImportDragActive = false;
+		selectScreenshotFile(firstUsableScreenshotFile(event.dataTransfer?.files));
+	}
+
+	function handleScreenshotPaste(event: ClipboardEvent) {
+		if (!screenshotImportOpen || screenshotImportStatus === 'loading') return;
+		const file = screenshotFileFromClipboard(event.clipboardData);
+		if (!file) return;
+		event.preventDefault();
+		selectScreenshotFile(file);
+	}
+
+	function hasDraggedFiles(dataTransfer: DataTransfer | null) {
+		return Boolean(dataTransfer?.types.includes('Files'));
+	}
+
+	function screenshotFileFromClipboard(dataTransfer: DataTransfer | null) {
+		const file = firstUsableScreenshotFile(dataTransfer?.files);
+		if (file) return file;
+		const itemFiles = Array.from(dataTransfer?.items ?? [])
+			.filter((item) => item.kind === 'file')
+			.map((item) => item.getAsFile())
+			.filter((item): item is File => Boolean(item));
+		return firstUsableScreenshotFile(itemFiles);
+	}
+
+	function firstUsableScreenshotFile(files: FileList | File[] | null | undefined) {
+		const fileList = Array.from(files ?? []);
+		return (
+			fileList.find((file) => isAcceptedScreenshotFile(file) && file.size <= SCREENSHOT_MAX_BYTES) ??
+			fileList[0] ??
+			null
+		);
+	}
+
 	function selectScreenshotFile(file: File | null) {
 		screenshotImportResult = null;
 		screenshotImportMessage = '';
+		screenshotImportDragActive = false;
 
 		if (!file) {
 			resetScreenshotImport();
@@ -469,6 +563,7 @@
 		screenshotImportPreviewUrl = browser ? URL.createObjectURL(file) : '';
 		screenshotImportStatus = 'ready';
 		screenshotImportMessage = `${file.name} (${formatFileSize(file.size)})`;
+		if (screenshotImportFileInput) screenshotImportFileInput.value = '';
 	}
 
 	async function runScreenshotImport() {
@@ -522,8 +617,9 @@
 
 		calculator.stats = mergeImportedStats(calculator.stats, screenshotImportResult.stats);
 		clearDraftsForPanel('base');
-		screenshotImportStatus = 'success';
-		screenshotImportMessage = 'Applied to base stats.';
+		resetScreenshotImport();
+		screenshotImportOpen = false;
+		showScreenshotImportApplyNotice('Base stats updated.');
 	}
 
 	function isAcceptedScreenshotFile(file: File) {
@@ -545,6 +641,63 @@
 
 	function formatImportConfidence(confidence: number) {
 		return `${Math.round(confidence * 100)}%`;
+	}
+
+	function showScreenshotImportApplyNotice(message: string) {
+		screenshotImportApplyNotice = message;
+		if (!browser) return;
+		if (screenshotImportApplyNoticeTimeout !== null) {
+			window.clearTimeout(screenshotImportApplyNoticeTimeout);
+		}
+		screenshotImportApplyNoticeTimeout = window.setTimeout(() => {
+			screenshotImportApplyNotice = '';
+			screenshotImportApplyNoticeTimeout = null;
+		}, 7000);
+	}
+
+	function clearScreenshotImportApplyNotice() {
+		screenshotImportApplyNotice = '';
+		if (!browser || screenshotImportApplyNoticeTimeout === null) return;
+		window.clearTimeout(screenshotImportApplyNoticeTimeout);
+		screenshotImportApplyNoticeTimeout = null;
+	}
+
+	function screenshotImportStatusText() {
+		if (screenshotImportMessage) return screenshotImportMessage;
+		return 'PNG, JPEG, WEBP, GIF up to 8 MB.';
+	}
+
+	function screenshotImportStatusClass() {
+		if (screenshotImportStatus === 'error') {
+			return 'border-destructive/40 bg-destructive/10 text-destructive';
+		}
+		if (screenshotImportHasReviewWarning) {
+			return 'border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-200';
+		}
+		if (screenshotImportStatus === 'success') {
+			return 'border-emerald-500/35 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200';
+		}
+		if (screenshotImportStatus === 'loading') {
+			return 'border-primary/35 bg-primary/10 text-primary';
+		}
+		return 'border-border bg-muted/25 text-muted-foreground';
+	}
+
+	function screenshotImportZoneClass() {
+		if (screenshotImportStatus === 'loading') {
+			return 'cursor-wait border-primary/35 bg-primary/10 text-muted-foreground';
+		}
+		if (screenshotImportDragActive) {
+			return 'cursor-copy border-primary/60 bg-primary/10 text-primary shadow-[inset_0_0_0_1px_var(--primary)]';
+		}
+		if (screenshotImportStatus === 'error') {
+			return 'cursor-pointer border-destructive/35 bg-destructive/5 text-muted-foreground hover:bg-destructive/10';
+		}
+		return 'cursor-pointer border-border bg-muted/20 text-muted-foreground hover:border-primary/40 hover:bg-muted/35';
+	}
+
+	function importVariantLabel(variant: ScreenshotImportResult['variant']) {
+		return variant === 'magical' ? 'Magical focus' : 'Physical focus';
 	}
 
 	function screenshotPreviewValue(key: StatKey, value: string, index: 0 | 1) {
@@ -1157,6 +1310,8 @@
 	}
 </script>
 
+<svelte:window onpaste={handleScreenshotPaste} />
+
 <svelte:head>
 	<title>LaTale Damage Calculator</title>
 	<meta
@@ -1268,6 +1423,12 @@
 				<div class="flex min-w-0 flex-wrap items-center gap-2">
 					<BarChart3Icon class="size-4 text-primary" />
 					<h2 class="text-sm font-semibold">Stat Workbench</h2>
+					{#if screenshotImportApplyNotice}
+						<Badge variant="secondary" class="border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200">
+							<CheckIcon data-icon="inline-start" />
+							{screenshotImportApplyNotice}
+						</Badge>
+					{/if}
 				</div>
 				<Tooltip.Provider delayDuration={120}>
 					<div class="flex flex-wrap items-center gap-2">
@@ -1898,128 +2059,194 @@
 </Sheet.Root>
 
 <Sheet.Root bind:open={screenshotImportOpen}>
-	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,38rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
+	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,40rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
 		<Sheet.Header class="border-b border-border/80 px-5 py-4">
 			<Sheet.Title>Import Screenshot</Sheet.Title>
 		</Sheet.Header>
 
 		<div class="space-y-4 p-5">
-			<div class="space-y-2">
-				<Label for="screenshot-import-file">Screenshot</Label>
-				<Input
-					bind:ref={screenshotImportFileInput}
-					id="screenshot-import-file"
-					type="file"
-					accept="image/png,image/jpeg,image/webp,image/gif"
-					disabled={screenshotImportStatus === 'loading'}
-					onchange={handleScreenshotFileChange}
-				/>
-			</div>
+			<input
+				bind:this={screenshotImportFileInput}
+				id="screenshot-import-file"
+				class="hidden"
+				type="file"
+				accept="image/png,image/jpeg,image/webp,image/gif"
+				disabled={screenshotImportStatus === 'loading'}
+				hidden
+				tabindex="-1"
+				aria-hidden="true"
+				onchange={handleScreenshotFileChange}
+			/>
 
-			{#if screenshotImportPreviewUrl}
-				<div class="overflow-hidden rounded-md border border-border bg-muted/20">
+			<div
+				role="button"
+				tabindex={screenshotImportStatus === 'loading' ? -1 : 0}
+				aria-controls="screenshot-import-file"
+				aria-disabled={screenshotImportStatus === 'loading'}
+				class={`relative grid min-h-52 overflow-hidden rounded-md border border-dashed transition ${screenshotImportZoneClass()}`}
+				onclick={openScreenshotFilePicker}
+				onkeydown={handleScreenshotImportZoneKeydown}
+				ondragenter={handleScreenshotDragEnter}
+				ondragover={handleScreenshotDragOver}
+				ondragleave={handleScreenshotDragLeave}
+				ondrop={handleScreenshotDrop}
+			>
+				{#if screenshotImportPreviewUrl}
 					<img
 						src={screenshotImportPreviewUrl}
 						alt={screenshotImportFile?.name ?? 'Selected screenshot'}
-						class="max-h-72 w-full object-contain"
+						class="h-full max-h-80 min-h-52 w-full object-contain"
 					/>
-				</div>
-			{:else}
-				<div class="grid min-h-32 place-items-center rounded-md border border-dashed border-border bg-muted/20 text-muted-foreground">
-					<FileImageIcon class="size-8" />
-				</div>
-			{/if}
+					<div class="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 border-t border-border/70 bg-background/92 px-3 py-2 text-xs backdrop-blur">
+						<span class="min-w-0 truncate font-medium text-foreground">
+							{screenshotImportFile?.name}
+						</span>
+						<span class="shrink-0 text-muted-foreground">Change</span>
+					</div>
+				{:else}
+					<div class="grid place-items-center px-5 py-8 text-center">
+						<div class="grid size-12 place-items-center rounded-md border border-border bg-background text-muted-foreground shadow-sm">
+							{#if screenshotImportStatus === 'loading'}
+								<LoaderCircleIcon class="size-6 animate-spin text-primary" />
+							{:else if screenshotImportDragActive}
+								<CloudUploadIcon class="size-6 text-primary" />
+							{:else}
+								<FileImageIcon class="size-6" />
+							{/if}
+						</div>
+						<div class="mt-3 text-sm font-semibold text-foreground">
+							{#if screenshotImportDragActive}
+								Drop screenshot
+							{:else}
+								Choose screenshot
+							{/if}
+						</div>
+						<div class="mt-1 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+							<span>PNG, JPEG, WEBP, GIF</span>
+							<span class="text-border">/</span>
+							<span>8 MB max</span>
+							<span class="text-border">/</span>
+							<span class="inline-flex items-center gap-1">
+								<ClipboardPasteIcon class="size-3.5" />
+								Paste enabled
+							</span>
+						</div>
+					</div>
+				{/if}
+			</div>
 
-			<div class="flex flex-wrap gap-2">
-				<Button onclick={runScreenshotImport} disabled={!screenshotImportFile || screenshotImportStatus === 'loading'}>
-					{#if screenshotImportStatus === 'loading'}
-						<LoaderCircleIcon data-icon="inline-start" class="animate-spin" />
-					{:else}
-						<CloudUploadIcon data-icon="inline-start" />
-					{/if}
-					Import
-				</Button>
-				<Button variant="outline" onclick={resetScreenshotImport} disabled={screenshotImportStatus === 'loading'}>
+			<div class={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${screenshotImportStatusClass()}`}>
+				{#if screenshotImportStatus === 'loading'}
+					<LoaderCircleIcon class="mt-0.5 size-4 shrink-0 animate-spin" />
+				{:else if screenshotImportStatus === 'error'}
+					<CircleAlertIcon class="mt-0.5 size-4 shrink-0" />
+				{:else if screenshotImportHasReviewWarning}
+					<CircleAlertIcon class="mt-0.5 size-4 shrink-0" />
+				{:else if screenshotImportStatus === 'success'}
+					<CheckIcon class="mt-0.5 size-4 shrink-0" />
+				{:else}
+					<FileImageIcon class="mt-0.5 size-4 shrink-0" />
+				{/if}
+				<span class="min-w-0">{screenshotImportStatusText()}</span>
+			</div>
+
+			<div class="flex flex-wrap items-center justify-between gap-2">
+				<div class="flex flex-wrap gap-2">
+					<Button onclick={runScreenshotImport} disabled={!screenshotImportFile || screenshotImportStatus === 'loading'}>
+						{#if screenshotImportStatus === 'loading'}
+							<LoaderCircleIcon data-icon="inline-start" class="animate-spin" />
+						{:else}
+							<CloudUploadIcon data-icon="inline-start" />
+						{/if}
+						Import
+					</Button>
+					<Button variant="outline" onclick={openScreenshotFilePicker} disabled={screenshotImportStatus === 'loading'}>
+						<FileImageIcon data-icon="inline-start" />
+						Choose
+					</Button>
+				</div>
+				<Button
+					variant="ghost"
+					onclick={resetScreenshotImport}
+					disabled={screenshotImportStatus === 'loading'}
+				>
 					<EraserIcon data-icon="inline-start" />
 					Clear
 				</Button>
 			</div>
 
-			{#if screenshotImportMessage}
-				<div
-					class={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${
-						screenshotImportStatus === 'error'
-							? 'border-destructive/40 bg-destructive/10 text-destructive'
-							: 'border-border bg-muted/25 text-muted-foreground'
-					}`}
-				>
-					{#if screenshotImportStatus === 'error'}
-						<CircleAlertIcon class="mt-0.5 size-4 shrink-0" />
-					{:else}
-						<FileImageIcon class="mt-0.5 size-4 shrink-0" />
-					{/if}
-					<span class="min-w-0">{screenshotImportMessage}</span>
-				</div>
-			{/if}
-
 			{#if screenshotImportResult}
-				<div class="flex flex-wrap items-center gap-2">
-					<Badge variant="secondary">{screenshotImportResult.variant}</Badge>
-					<Badge variant="outline">Confidence {formatImportConfidence(screenshotImportResult.confidence)}</Badge>
-					{#if screenshotImportMissing.length > 0}
-						<Badge variant="destructive">{screenshotImportMissing.length} missing</Badge>
-					{/if}
-				</div>
-
-				{#if screenshotImportResult.warnings.length > 0}
-					<div class="space-y-1 rounded-md border border-border bg-muted/25 p-3">
-						{#each screenshotImportResult.warnings as warning}
-							<div class="flex items-start gap-2 text-xs text-muted-foreground">
-								<CircleAlertIcon class="mt-0.5 size-3.5 shrink-0" />
-								<span class="min-w-0">{warning}</span>
-							</div>
-						{/each}
+				<div class="space-y-3 rounded-md border border-border bg-muted/15 p-3">
+					<div class="flex flex-wrap items-center gap-2">
+						<Badge variant="secondary">{importVariantLabel(screenshotImportResult.variant)}</Badge>
+						<Badge
+							variant="outline"
+							class={screenshotImportResult.confidence < 0.65
+								? 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+								: ''}
+						>
+							Confidence {formatImportConfidence(screenshotImportResult.confidence)}
+						</Badge>
+						{#if screenshotImportMissing.length > 0}
+							<Badge variant="destructive">{screenshotImportMissing.length} missing</Badge>
+						{/if}
 					</div>
-				{/if}
 
-				<div class="overflow-hidden rounded-md border border-border">
-					<Table.Root>
-						<Table.Header>
-							<Table.Row>
-								<Table.Head>Stat</Table.Head>
-								<Table.Head class="text-right">Flat</Table.Head>
-								<Table.Head class="text-right">%</Table.Head>
-							</Table.Row>
-						</Table.Header>
-						<Table.Body>
-							{#each screenshotImportRows as row}
-								<Table.Row class={row.missing ? 'bg-destructive/5' : ''}>
-									<Table.Cell class="font-medium">{row.label}</Table.Cell>
-									<Table.Cell class={`text-right tabular-nums ${row.values[0] ? '' : 'text-destructive'}`}>
-										{screenshotPreviewValue(row.key, row.values[0], 0)}
-									</Table.Cell>
-									<Table.Cell
-										class={`text-right tabular-nums ${
-											PERCENTLESS_STATS.has(row.key) || row.values[1] ? 'text-muted-foreground' : 'text-destructive'
-										}`}
-									>
-										{#if PERCENTLESS_STATS.has(row.key)}
-											---
-										{:else}
-											{screenshotPreviewValue(row.key, row.values[1], 1)}
-										{/if}
-									</Table.Cell>
+					{#if screenshotImportResult.warnings.length > 0}
+						<div class="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+							<div class="text-xs font-semibold text-amber-900 dark:text-amber-100">Review notes</div>
+							<div class="space-y-1.5">
+								{#each screenshotImportResult.warnings as warning}
+									<div class="flex items-start gap-2 text-xs text-amber-900/85 dark:text-amber-100/85">
+										<CircleAlertIcon class="mt-0.5 size-3.5 shrink-0" />
+										<span class="min-w-0">{warning}</span>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					<div class="overflow-hidden rounded-md border border-border bg-background">
+						<Table.Root class="table-fixed text-xs">
+							<Table.Header>
+								<Table.Row>
+									<Table.Head class="h-9 w-[44%] px-3">Stat</Table.Head>
+									<Table.Head class="h-9 w-[28%] px-3 text-right">Flat</Table.Head>
+									<Table.Head class="h-9 w-[28%] px-3 text-right">%</Table.Head>
 								</Table.Row>
-							{/each}
-						</Table.Body>
-					</Table.Root>
-				</div>
+							</Table.Header>
+							<Table.Body>
+								{#each screenshotImportRows as row}
+									<Table.Row class={row.missing ? 'border-l-2 border-l-destructive bg-destructive/5' : 'border-l-2 border-l-transparent'}>
+										<Table.Cell class="px-3 py-2 font-medium">
+											<span class="block truncate">{row.label}</span>
+										</Table.Cell>
+										<Table.Cell class={`px-3 py-2 text-right tabular-nums ${row.values[0] ? '' : 'text-destructive'}`}>
+											{screenshotPreviewValue(row.key, row.values[0], 0)}
+										</Table.Cell>
+										<Table.Cell
+											class={`px-3 py-2 text-right tabular-nums ${
+												PERCENTLESS_STATS.has(row.key) || row.values[1] ? 'text-muted-foreground' : 'text-destructive'
+											}`}
+										>
+											{#if PERCENTLESS_STATS.has(row.key)}
+												---
+											{:else}
+												{screenshotPreviewValue(row.key, row.values[1], 1)}
+											{/if}
+										</Table.Cell>
+									</Table.Row>
+								{/each}
+							</Table.Body>
+						</Table.Root>
+					</div>
 
-				<div class="flex flex-wrap gap-2">
-					<Button onclick={applyScreenshotImport} disabled={!screenshotImportCanApply}>
-						<CheckIcon data-icon="inline-start" />
-						Apply to Base
-					</Button>
+					<div class="flex flex-wrap justify-end gap-2">
+						<Button onclick={applyScreenshotImport} disabled={!screenshotImportCanApply}>
+							<CheckIcon data-icon="inline-start" />
+							Apply to Base
+						</Button>
+					</div>
 				</div>
 			{/if}
 		</div>
