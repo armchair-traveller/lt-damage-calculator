@@ -9,20 +9,15 @@
 	import BarChart3Icon from '@lucide/svelte/icons/bar-chart-3';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
-	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
-	import ClipboardPasteIcon from '@lucide/svelte/icons/clipboard-paste';
-	import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import ClipboardCopyIcon from '@lucide/svelte/icons/clipboard-copy';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
-	import FileImageIcon from '@lucide/svelte/icons/file-image';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import ImageUpIcon from '@lucide/svelte/icons/image-up';
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import LockIcon from '@lucide/svelte/icons/lock';
-	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ScaleIcon from '@lucide/svelte/icons/scale';
@@ -31,17 +26,32 @@
 	import TargetIcon from '@lucide/svelte/icons/target';
 	import UploadIcon from '@lucide/svelte/icons/upload';
 	import XIcon from '@lucide/svelte/icons/x';
+	import { isDisplayedTie } from '$lib/calculator/comparison.js';
 	import {
-		classifyDisplayedComparison,
-		isDisplayedTie
-	} from '$lib/calculator/comparison.js';
+		buildComparisonDeltas,
+		buildComparisonMatrixRows,
+		COMPARISON_METRICS,
+		formatDisplayIncrease,
+		formatMetricIncreases,
+		rankComparisonPanels,
+		summarizeChangeComparison,
+		type ChangeSummary,
+		type ComparisonPanelInput,
+		type ComparisonSide
+	} from '$lib/calculator/comparison-view.js';
 	import {
-		SCREENSHOT_VARIANTS,
-		findMissingImportedStats,
-		mergeImportedStats,
-		type ScreenshotImportResult,
-		type ScreenshotVariant
-	} from '$lib/calculator/importer.js';
+		buildWorkbenchCellImpacts,
+		buildWorkbenchImpactRows,
+		cellImpactId,
+		cleanNumericText,
+		comparisonDeltaScale,
+		INPUT_EPSILON,
+		panelHasEnteredValues,
+		panelHasMeaningfulChanges,
+		type WorkbenchCellImpact,
+		type WorkbenchImpactRow,
+		type WorkbenchPanelId
+	} from '$lib/calculator/workbench-impact.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
@@ -59,6 +69,7 @@
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import ScreenshotImportSheet from '$lib/components/screenshot-import-sheet.svelte';
 	import ThemeToggle from '$lib/components/theme-toggle.svelte';
 	import {
 		applyClassPreset,
@@ -115,64 +126,6 @@
 		}
 	] satisfies Array<{ label: string; keys: StatKey[] }>;
 
-	const COMPARISON_METRICS = [
-		{ id: 'avg', label: 'Avg' },
-		{ id: 'normal', label: 'Normal' },
-		{ id: 'boss', label: 'Boss' }
-	] as const;
-	const INPUT_EPSILON = 0.0000000001;
-	const MIN_DELTA_SCALE = 0.0001;
-	const SCREENSHOT_ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
-	const SCREENSHOT_MAX_BYTES = 8 * 1024 * 1024;
-
-	type ComparisonMetricId = (typeof COMPARISON_METRICS)[number]['id'];
-	type ComparisonSide = 'a' | 'b';
-	type WorkbenchPanelId = 'base' | ComparisonSide;
-	type ScreenshotImportStatus = 'idle' | 'ready' | 'loading' | 'success' | 'error';
-	type MetricValues<T> = Record<ComparisonMetricId, T>;
-	type ComparisonRank = {
-		rank: number;
-		isBest: boolean;
-		isTiedBest: boolean;
-		margin: number;
-		marginValueLabel: string;
-	};
-	type ComparisonPanelInput = {
-		id: ComparisonSide;
-		label: string;
-		shortLabel: string;
-		buffedDamage: MetricValues<string>;
-		buffedIncrease: MetricValues<string>;
-		rawBuffedIncrease: MetricValues<number>;
-		rawIncrease: number;
-		rawDamage: number;
-	};
-	type RankedComparisonPanel = ComparisonPanelInput & ComparisonRank;
-	type SummaryComparisonPanel = {
-		id: ComparisonSide;
-		shortLabel: string;
-		buffedIncrease: MetricValues<string>;
-		isBest: boolean;
-		isTiedBest: boolean;
-		marginValueLabel: string;
-		margin: number;
-	};
-	type ChangeSummary = {
-		outcome: ComparisonSide | 'tie';
-		label: string;
-		value: string;
-		detail: string;
-		stickyLabel: string;
-	};
-	type WorkbenchImpactRow = {
-		key: StatKey;
-		aImpact: number;
-		bImpact: number;
-		delta: number;
-		hasInput: boolean;
-		winner: ComparisonSide | 'tie' | 'empty';
-		summary: string;
-	};
 	type WorkbenchInputState = {
 		cleaned: string;
 		displayValue: string;
@@ -184,13 +137,6 @@
 		numericValue: number;
 		showDisplayOverlay: boolean;
 		showPercentSuffix: boolean;
-	};
-	type WorkbenchCellImpact = {
-		id: string;
-		panelId: ComparisonSide;
-		key: StatKey;
-		index: 0 | 1;
-		value: number;
 	};
 
 	let calculator: CalculatorState = $state(createDefaultState());
@@ -204,14 +150,6 @@
 	let screenshotImportOpen = $state(false);
 	let transferText = $state('');
 	let transferStatus = $state('');
-	let screenshotImportFile: File | null = $state<File | null>(null);
-	let screenshotImportFileInput: HTMLInputElement | null = $state<HTMLInputElement | null>(null);
-	let screenshotImportPreviewUrl = $state('');
-	let screenshotImportStatus: ScreenshotImportStatus = $state<ScreenshotImportStatus>('idle');
-	let screenshotImportMessage = $state('');
-	let screenshotImportResult: ScreenshotImportResult | null = $state<ScreenshotImportResult | null>(null);
-	let screenshotImportVariant: ScreenshotVariant = $state('physical');
-	let screenshotImportDragActive = $state(false);
 	let screenshotImportApplyNotice = $state('');
 	let screenshotImportApplyNoticeTimeout: number | null = null;
 	let buffQuery = $state('');
@@ -270,16 +208,12 @@
 	const comparisonDeltas = $derived(
 		hasMeaningfulComparison ? buildComparisonDeltas(comparisonPanels) : []
 	);
-	const comparisonDeltaScaleMax = $derived(
-		Math.max(MIN_DELTA_SCALE, ...comparisonDeltas.map((delta) => Math.abs(delta.value)))
-	);
+	const comparisonDeltaScaleMax = $derived(comparisonDeltaScale(comparisonDeltas));
 	const workbenchImpactRows = $derived(buildWorkbenchImpactRows(calculator));
 	const workbenchImpactByKey = $derived(
 		Object.fromEntries(workbenchImpactRows.map((row) => [row.key, row])) as Record<StatKey, WorkbenchImpactRow>
 	);
-	const workbenchImpactScaleMax = $derived(
-		Math.max(MIN_DELTA_SCALE, ...workbenchImpactRows.map((row) => Math.abs(row.delta)))
-	);
+	const workbenchImpactScaleMax = $derived(comparisonDeltaScale(workbenchImpactRows));
 	const workbenchCellImpacts = $derived(buildWorkbenchCellImpacts(calculator));
 	const workbenchCellImpactById = $derived(
 		Object.fromEntries(workbenchCellImpacts.map((impact) => [impact.id, impact])) as Record<
@@ -287,40 +221,9 @@
 			WorkbenchCellImpact | undefined
 		>
 	);
-	const workbenchCellImpactScaleMax = $derived(
-		Math.max(MIN_DELTA_SCALE, ...workbenchCellImpacts.map((impact) => Math.abs(impact.value)))
-	);
+	const workbenchCellImpactScaleMax = $derived(comparisonDeltaScale(workbenchCellImpacts));
 	const hasAChanges = $derived(panelHasEnteredValues(calculator.statsA));
 	const hasBChanges = $derived(panelHasEnteredValues(calculator.statsB));
-	const screenshotImportSelectedStats = $derived(
-		screenshotImportResult
-			? (screenshotImportResult.variants?.[screenshotImportVariant] ?? screenshotImportResult.stats)
-			: null
-	);
-	const screenshotImportMissing = $derived(
-		screenshotImportSelectedStats ? findMissingImportedStats(screenshotImportSelectedStats) : []
-	);
-	const screenshotImportRows = $derived.by(() => {
-		const stats = screenshotImportSelectedStats;
-		if (!stats) return [];
-		return STAT_KEYS.map((key) => ({
-			key,
-			label: screenshotImportStatLabel(key, screenshotImportVariant),
-			values: stats[key] ?? ['', ''],
-			missing: screenshotImportMissing.includes(key)
-		}));
-	});
-	const screenshotImportCanApply = $derived(
-		Boolean(screenshotImportResult && screenshotImportMissing.length === 0 && screenshotImportStatus !== 'loading')
-	);
-	const screenshotImportHasReviewWarning = $derived(
-		Boolean(
-			screenshotImportResult &&
-				(screenshotImportResult.confidence < 0.65 ||
-					screenshotImportResult.warnings.length > 0 ||
-					screenshotImportMissing.length > 0)
-		)
-	);
 
 	$effect(() => {
 		if (!browser || hydrated) return;
@@ -337,13 +240,6 @@
 	$effect(() => {
 		if (!browser || !hydrated) return;
 		window.localStorage.setItem(STORAGE_KEY, serializeState(calculator));
-	});
-
-	$effect(() => {
-		const previewUrl = screenshotImportPreviewUrl;
-		return () => {
-			if (previewUrl) URL.revokeObjectURL(previewUrl);
-		};
 	});
 
 	$effect(() => {
@@ -454,198 +350,10 @@
 		transferStatus = 'Copied.';
 	}
 
-	function resetScreenshotImport() {
-		screenshotImportFile = null;
-		screenshotImportPreviewUrl = '';
-		screenshotImportStatus = 'idle';
-		screenshotImportMessage = '';
-		screenshotImportResult = null;
-		screenshotImportVariant = 'physical';
-		screenshotImportDragActive = false;
-		if (screenshotImportFileInput) screenshotImportFileInput.value = '';
-	}
-
-	function handleScreenshotFileChange(event: Event) {
-		const input = event.currentTarget as HTMLInputElement;
-		selectScreenshotFile(input.files?.[0] ?? null);
-	}
-
-	function openScreenshotFilePicker() {
-		if (screenshotImportStatus === 'loading') return;
-		screenshotImportFileInput?.click();
-	}
-
-	function handleScreenshotImportZoneKeydown(event: KeyboardEvent) {
-		if (event.key !== 'Enter' && event.key !== ' ') return;
-		event.preventDefault();
-		openScreenshotFilePicker();
-	}
-
-	function handleScreenshotDragEnter(event: DragEvent) {
-		if (screenshotImportStatus === 'loading' || !hasDraggedFiles(event.dataTransfer)) return;
-		event.preventDefault();
-		screenshotImportDragActive = true;
-	}
-
-	function handleScreenshotDragOver(event: DragEvent) {
-		if (screenshotImportStatus === 'loading' || !hasDraggedFiles(event.dataTransfer)) return;
-		event.preventDefault();
-		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
-		screenshotImportDragActive = true;
-	}
-
-	function handleScreenshotDragLeave(event: DragEvent) {
-		const nextTarget = event.relatedTarget;
-		if (nextTarget instanceof Node && event.currentTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
-			return;
-		}
-		screenshotImportDragActive = false;
-	}
-
-	function handleScreenshotDrop(event: DragEvent) {
-		if (screenshotImportStatus === 'loading') return;
-		event.preventDefault();
-		screenshotImportDragActive = false;
-		selectScreenshotFile(firstUsableScreenshotFile(event.dataTransfer?.files));
-	}
-
-	function handleScreenshotPaste(event: ClipboardEvent) {
-		if (!screenshotImportOpen || screenshotImportStatus === 'loading') return;
-		const file = screenshotFileFromClipboard(event.clipboardData);
-		if (!file) return;
-		event.preventDefault();
-		selectScreenshotFile(file);
-	}
-
-	function hasDraggedFiles(dataTransfer: DataTransfer | null) {
-		return Boolean(dataTransfer?.types.includes('Files'));
-	}
-
-	function screenshotFileFromClipboard(dataTransfer: DataTransfer | null) {
-		const file = firstUsableScreenshotFile(dataTransfer?.files);
-		if (file) return file;
-		const itemFiles = Array.from(dataTransfer?.items ?? [])
-			.filter((item) => item.kind === 'file')
-			.map((item) => item.getAsFile())
-			.filter((item): item is File => Boolean(item));
-		return firstUsableScreenshotFile(itemFiles);
-	}
-
-	function firstUsableScreenshotFile(files: FileList | File[] | null | undefined) {
-		const fileList = Array.from(files ?? []);
-		return (
-			fileList.find((file) => isAcceptedScreenshotFile(file) && file.size <= SCREENSHOT_MAX_BYTES) ??
-			fileList[0] ??
-			null
-		);
-	}
-
-	function selectScreenshotFile(file: File | null) {
-		screenshotImportResult = null;
-		screenshotImportVariant = 'physical';
-		screenshotImportMessage = '';
-		screenshotImportDragActive = false;
-
-		if (!file) {
-			resetScreenshotImport();
-			return;
-		}
-
-		if (!isAcceptedScreenshotFile(file)) {
-			screenshotImportFile = null;
-			screenshotImportPreviewUrl = '';
-			screenshotImportStatus = 'error';
-			screenshotImportMessage = 'Use a PNG, JPEG, WEBP, or non-animated GIF.';
-			if (screenshotImportFileInput) screenshotImportFileInput.value = '';
-			return;
-		}
-
-		if (file.size > SCREENSHOT_MAX_BYTES) {
-			screenshotImportFile = null;
-			screenshotImportPreviewUrl = '';
-			screenshotImportStatus = 'error';
-			screenshotImportMessage = 'Use an image smaller than 8 MB.';
-			if (screenshotImportFileInput) screenshotImportFileInput.value = '';
-			return;
-		}
-
-		screenshotImportFile = file;
-		screenshotImportPreviewUrl = browser ? URL.createObjectURL(file) : '';
-		screenshotImportStatus = 'ready';
-		screenshotImportMessage = `${file.name} (${formatFileSize(file.size)})`;
-		if (screenshotImportFileInput) screenshotImportFileInput.value = '';
-	}
-
-	async function runScreenshotImport() {
-		if (!screenshotImportFile) {
-			screenshotImportStatus = 'error';
-			screenshotImportMessage = 'Choose a screenshot first.';
-			return;
-		}
-
-		screenshotImportStatus = 'loading';
-		screenshotImportMessage = 'Reading screenshot...';
-		screenshotImportResult = null;
-
-		try {
-			const formData = new FormData();
-			formData.set('screenshot', screenshotImportFile);
-			const response = await fetch('/api/import-stats', {
-				method: 'POST',
-				body: formData
-			});
-			const body = await response.json().catch(() => ({}));
-			if (!response.ok) {
-				throw new Error(typeof body.message === 'string' ? body.message : 'Screenshot import failed.');
-			}
-
-			const result = body as ScreenshotImportResult;
-			screenshotImportVariant = normalizeImportVariant(result.variant);
-			screenshotImportResult = result;
-			refreshScreenshotImportReviewStatus();
-		} catch (error) {
-			screenshotImportStatus = 'error';
-			screenshotImportMessage = error instanceof Error ? error.message : 'Screenshot import failed.';
-		}
-	}
-
-	function applyScreenshotImport() {
-		if (!screenshotImportResult) return;
-		const selectedStats = screenshotImportSelectedStats;
-		if (!selectedStats) return;
-		if (findMissingImportedStats(selectedStats).length > 0) {
-			screenshotImportStatus = 'error';
-			screenshotImportMessage = 'Incomplete extraction.';
-			return;
-		}
-
-		const appliedVariant = screenshotImportVariant;
-		calculator.stats = mergeImportedStats(calculator.stats, selectedStats);
+	function applyScreenshotImportResult(nextStats: UiStats, notice: string) {
+		calculator.stats = nextStats;
 		clearDraftsForPanel('base');
-		resetScreenshotImport();
-		screenshotImportOpen = false;
-		showScreenshotImportApplyNotice(`${importVariantLabel(appliedVariant)} imported.`);
-	}
-
-	function isAcceptedScreenshotFile(file: File) {
-		if (SCREENSHOT_ACCEPTED_TYPES.has(file.type)) return true;
-		const extension = file.name.split('.').pop()?.toLowerCase();
-		return (
-			extension === 'png' ||
-			extension === 'jpg' ||
-			extension === 'jpeg' ||
-			extension === 'webp' ||
-			extension === 'gif'
-		);
-	}
-
-	function formatFileSize(size: number) {
-		if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-		return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-	}
-
-	function formatImportConfidence(confidence: number) {
-		return `${Math.round(confidence * 100)}%`;
+		showScreenshotImportApplyNotice(notice);
 	}
 
 	function showScreenshotImportApplyNotice(message: string) {
@@ -667,92 +375,6 @@
 		screenshotImportApplyNoticeTimeout = null;
 	}
 
-	function screenshotImportStatusText() {
-		if (screenshotImportMessage) return screenshotImportMessage;
-		return 'PNG, JPEG, WEBP, GIF up to 8 MB.';
-	}
-
-	function screenshotImportStatusClass() {
-		if (screenshotImportStatus === 'error') {
-			return 'border-destructive/40 bg-destructive/10 text-destructive';
-		}
-		if (screenshotImportHasReviewWarning) {
-			return 'border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-200';
-		}
-		if (screenshotImportStatus === 'success') {
-			return 'border-emerald-500/35 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200';
-		}
-		if (screenshotImportStatus === 'loading') {
-			return 'border-primary/35 bg-primary/10 text-primary';
-		}
-		return 'border-border bg-muted/25 text-muted-foreground';
-	}
-
-	function screenshotImportZoneClass() {
-		if (screenshotImportStatus === 'loading') {
-			return 'cursor-wait border-primary/35 bg-primary/10 text-muted-foreground';
-		}
-		if (screenshotImportDragActive) {
-			return 'cursor-copy border-primary/60 bg-primary/10 text-primary shadow-[inset_0_0_0_1px_var(--primary)]';
-		}
-		if (screenshotImportStatus === 'error') {
-			return 'cursor-pointer border-destructive/35 bg-destructive/5 text-muted-foreground hover:bg-destructive/10';
-		}
-		return 'cursor-pointer border-border bg-muted/20 text-muted-foreground hover:border-primary/40 hover:bg-muted/35';
-	}
-
-	function importedStatsForVariant(result: ScreenshotImportResult, variant: ScreenshotVariant) {
-		return result.variants?.[variant] ?? result.stats;
-	}
-
-	function normalizeImportVariant(variant: unknown): ScreenshotVariant {
-		return variant === 'magical' ? 'magical' : 'physical';
-	}
-
-	function selectScreenshotImportVariant(variant: ScreenshotVariant) {
-		screenshotImportVariant = variant;
-		refreshScreenshotImportReviewStatus();
-	}
-
-	function refreshScreenshotImportReviewStatus() {
-		if (!screenshotImportResult) return;
-		const missing = findMissingImportedStats(importedStatsForVariant(screenshotImportResult, screenshotImportVariant));
-		if (missing.length > 0) {
-			screenshotImportStatus = 'error';
-			screenshotImportMessage = 'Incomplete extraction.';
-			return;
-		}
-		screenshotImportStatus = 'success';
-		screenshotImportMessage =
-			screenshotImportResult.confidence < 0.65 ? 'Low confidence. Review values.' : 'Review values.';
-	}
-
-	function importVariantLabel(variant: ScreenshotVariant) {
-		return variant === 'magical' ? 'Magical focus' : 'Physical focus';
-	}
-
-	function importVariantName(variant: ScreenshotVariant) {
-		return variant === 'magical' ? 'Magical' : 'Physical';
-	}
-
-	function screenshotImportStatLabel(key: StatKey, variant: ScreenshotVariant) {
-		if (key === 'strength') return variant === 'magical' ? 'Intelligence' : 'Strength';
-		if (key === 'attack') return variant === 'magical' ? 'Ele. Intensity' : 'Attack';
-		return STAT_LABELS[key];
-	}
-
-	function screenshotImportVariantButtonClass(variant: ScreenshotVariant) {
-		return screenshotImportVariant === variant
-			? 'bg-background text-foreground shadow-sm'
-			: 'text-muted-foreground hover:text-foreground';
-	}
-
-	function screenshotPreviewValue(key: StatKey, value: string, index: 0 | 1) {
-		if (!value) return '---';
-		const displayed = displayOverlayValue(value, 'base');
-		return index === 1 && !PERCENTLESS_STATS.has(key) ? `${displayed}%` : displayed;
-	}
-
 	function setBuffs(next: SelectedBuffs) {
 		calculator.selectedBuffs = next;
 	}
@@ -772,48 +394,8 @@
 		return (event.currentTarget as HTMLInputElement).value;
 	}
 
-	function sanitizeNumericText(value: string) {
-		return value.replace(/[,%\s]/g, '').replace(/^\+/, '');
-	}
-
-	function cleanNumericText(value: string) {
-		return sanitizeNumericText(value);
-	}
-
-	function numericTextValue(value: string | undefined) {
-		const parsed = Number(cleanNumericText(value ?? ''));
-		return Number.isFinite(parsed) ? parsed : 0;
-	}
-
-	function hasInputValue(value: string | undefined) {
-		return cleanNumericText(value ?? '') !== '';
-	}
-
-	function isInvalidNumericText(value: string | undefined) {
-		const cleaned = cleanNumericText(value ?? '');
-		return cleaned !== '' && !Number.isFinite(Number(cleaned));
-	}
-
-	function isNonZeroValue(value: string | undefined) {
-		const cleaned = cleanNumericText(value ?? '');
-		const parsed = Number(cleaned);
-		return Number.isFinite(parsed) && Math.abs(parsed) > INPUT_EPSILON;
-	}
-
-	function panelHasEnteredValues(stats: UiStats) {
-		return STAT_KEYS.some((key) => hasInputValue(stats[key][0]) || hasInputValue(stats[key][1]));
-	}
-
-	function panelHasMeaningfulChanges(stats: UiStats) {
-		return STAT_KEYS.some((key) => isNonZeroValue(stats[key][0]) || isNonZeroValue(stats[key][1]));
-	}
-
 	function statInputId(panelId: string, key: StatKey, index: 0 | 1) {
 		return `${panelId}-${key}-${index === 0 ? 'flat' : 'percent'}`;
-	}
-
-	function cellImpactId(panelId: ComparisonSide, key: StatKey, index: 0 | 1) {
-		return `${panelId}-${key}-${index}`;
 	}
 
 	function panelLabel(panelId: WorkbenchPanelId) {
@@ -1006,110 +588,12 @@
 		return workbenchCellImpactById[cellImpactId(panelId, key, index)];
 	}
 
-	function singleStatChanges(stats: UiStats, key: StatKey): UiStats {
-		const changes = clearUiStats();
-		changes[key] = [stats[key][0], stats[key][1]];
-		return changes;
-	}
-
-	function buildWorkbenchImpactRows(state: CalculatorState): WorkbenchImpactRow[] {
-		return STAT_KEYS.map((key) => {
-			const scopedReport = calculateDashboard({
-				...state,
-				statsA: singleStatChanges(state.statsA, key),
-				statsB: singleStatChanges(state.statsB, key)
-			});
-			const aImpact = scopedReport.raw.buffedIncreaseA.avg;
-			const bImpact = scopedReport.raw.buffedIncreaseB.avg;
-			const delta = aImpact - bImpact;
-			const hasInput =
-				isNonZeroValue(state.statsA[key][0]) ||
-				isNonZeroValue(state.statsA[key][1]) ||
-				isNonZeroValue(state.statsB[key][0]) ||
-				isNonZeroValue(state.statsB[key][1]);
-			const comparison = classifyDisplayedComparison(aImpact, bImpact, hasInput);
-			const winner = comparison === 'none' ? 'empty' : comparison;
-			const winningImpact = winner === 'a' ? aImpact : winner === 'b' ? bImpact : Number.NaN;
-
-			return {
-				key,
-				aImpact,
-				bImpact,
-				delta,
-				hasInput,
-				winner,
-				summary:
-					winner === 'empty'
-						? 'No change'
-						: winner === 'tie'
-							? 'Even'
-							: `${winner.toUpperCase()} ${formatPointDelta(winningImpact)}`
-			};
-		});
-	}
-
-	function singleCellChanges(stats: UiStats, key: StatKey, index: 0 | 1): UiStats {
-		const changes = clearUiStats();
-		changes[key][index] = stats[key][index];
-		return changes;
-	}
-
-	function buildWorkbenchCellImpacts(state: CalculatorState): WorkbenchCellImpact[] {
-		const panels = [
-			{ panelId: 'a', stats: state.statsA },
-			{ panelId: 'b', stats: state.statsB }
-		] satisfies Array<{ panelId: ComparisonSide; stats: UiStats }>;
-		const impacts: WorkbenchCellImpact[] = [];
-
-		for (const { panelId, stats } of panels) {
-			for (const key of STAT_KEYS) {
-				for (const index of [0, 1] as const) {
-					if (index === 1 && PERCENTLESS_STATS.has(key)) continue;
-					if (!isNonZeroValue(stats[key][index])) continue;
-
-					const scopedReport = calculateDashboard({
-						...state,
-						statsA: panelId === 'a' ? singleCellChanges(stats, key, index) : clearUiStats(),
-						statsB: panelId === 'b' ? singleCellChanges(stats, key, index) : clearUiStats()
-					});
-
-					impacts.push({
-						id: cellImpactId(panelId, key, index),
-						panelId,
-						key,
-						index,
-						value:
-							panelId === 'a'
-								? scopedReport.raw.buffedIncreaseA.avg
-								: scopedReport.raw.buffedIncreaseB.avg
-					});
-				}
-			}
-		}
-
-		return impacts;
-	}
-
 	function activeTone(value: string | undefined) {
 		return `font-semibold tabular-nums ${toneClass(value)}`;
 	}
 
 	function formatPercent(value: number) {
 		return `${(value * 100).toFixed(1)}%`;
-	}
-
-	function formatDisplayIncrease(value: number) {
-		if (!Number.isFinite(value)) return '---';
-		const sign = value >= 0 ? '+' : '';
-		return `${sign}${(value * 100).toFixed(3)}%`;
-	}
-
-	function formatMetricIncreases(values: MetricValues<number>): MetricValues<string> {
-		return {
-			avg: formatDisplayIncrease(values.avg),
-			normal: formatDisplayIncrease(values.normal),
-			boss: formatDisplayIncrease(values.boss)
-		};
 	}
 
 	function formatNumber(value: number) {
@@ -1122,135 +606,6 @@
 		if (flat !== 0) parts.push(formatNumber(flat));
 		if (percent !== 0) parts.push(`${formatNumber(percent)}%`);
 		return parts.join(' / ');
-	}
-
-	function formatPointDelta(value: number) {
-		if (!Number.isFinite(value)) return '---';
-		return `${formatPointDeltaValue(value)} pp`;
-	}
-
-	function formatPointDeltaValue(value: number) {
-		if (!Number.isFinite(value)) return '---';
-		if (isDisplayedTie(value)) return '0.000';
-		const sign = value > 0 ? '+' : '';
-		return `${sign}${(value * 100).toFixed(3)}`;
-	}
-
-	function sortableScore(value: number) {
-		if (value === Infinity) return Number.MAX_SAFE_INTEGER;
-		if (value === -Infinity) return Number.MIN_SAFE_INTEGER;
-		return Number.isFinite(value) ? value : Number.MIN_SAFE_INTEGER;
-	}
-
-	function rankComparisonPanels<T extends { rawIncrease: number; rawDamage: number }>(panels: T[]): Array<T & ComparisonRank> {
-		const sorted = [...panels].sort(
-			(a, b) =>
-				sortableScore(b.rawIncrease) - sortableScore(a.rawIncrease) ||
-				sortableScore(b.rawDamage) - sortableScore(a.rawDamage)
-		);
-		const leader = sorted[0];
-		const runnerUp = sorted[1];
-		const isTie =
-			leader && runnerUp
-				? classifyDisplayedComparison(leader.rawIncrease, runnerUp.rawIncrease) === 'tie'
-				: false;
-
-		return panels.map((panel) => {
-			const rank = sorted.findIndex((candidate) => candidate === panel) + 1;
-			const isLeader = panel === leader;
-			const isBest = isLeader && !isTie;
-			const isTiedBest =
-				Boolean(leader) &&
-				isTie &&
-				classifyDisplayedComparison(panel.rawIncrease, leader.rawIncrease) === 'tie';
-			const comparisonTarget = isLeader ? runnerUp : leader;
-			const margin =
-				comparisonTarget && Number.isFinite(panel.rawIncrease) && Number.isFinite(comparisonTarget.rawIncrease)
-					? Math.abs(panel.rawIncrease - comparisonTarget.rawIncrease)
-					: Number.NaN;
-
-			return {
-				...panel,
-				rank,
-				isBest,
-				isTiedBest,
-				margin,
-				marginValueLabel: formatPointDeltaValue(margin)
-			};
-		});
-	}
-
-	function summarizeChangeComparison(panels: SummaryComparisonPanel[]): ChangeSummary | undefined {
-		const leaders = panels.filter((panel) => panel.isBest || panel.isTiedBest);
-		const leader = leaders[0];
-		if (!leader) return undefined;
-		if (leaders.length > 1) {
-			return {
-				outcome: 'tie',
-				label: 'A and B are even overall',
-				value: leader.buffedIncrease.avg,
-				detail: 'Same weighted average gain',
-				stickyLabel: 'A = B'
-			};
-		}
-
-		const other = panels.find((panel) => panel.id !== leader.id);
-		return {
-			outcome: leader.id,
-			label: `${leader.shortLabel} leads overall`,
-			value: leader.buffedIncrease.avg,
-			detail: other ? `${leader.marginValueLabel} pp over ${other.shortLabel}` : 'Weighted average leader',
-			stickyLabel: other
-				? `${leader.shortLabel} leads ${leader.marginValueLabel} pp`
-				: `${leader.shortLabel} leads`
-		};
-	}
-
-	function metricWinner(
-		panels: RankedComparisonPanel[],
-		metric: ComparisonMetricId
-	): ComparisonSide | 'tie' | undefined {
-		const a = panels.find((panel) => panel.id === 'a');
-		const b = panels.find((panel) => panel.id === 'b');
-		if (!a || !b) return undefined;
-		const comparison = classifyDisplayedComparison(
-			a.rawBuffedIncrease[metric],
-			b.rawBuffedIncrease[metric]
-		);
-		return comparison === 'none' ? undefined : comparison;
-	}
-
-	function buildComparisonMatrixRows(panels: RankedComparisonPanel[]) {
-		return panels.map((panel) => ({
-			id: panel.id,
-			label: panel.shortLabel,
-			metrics: COMPARISON_METRICS.map((metric) => {
-				const winner = metricWinner(panels, metric.id);
-				return {
-					id: metric.id,
-					label: metric.label,
-					gain: panel.buffedIncrease[metric.id],
-					damage: panel.buffedDamage[metric.id],
-					isWinner: winner === panel.id
-				};
-			})
-		}));
-	}
-
-	function buildComparisonDeltas(panels: RankedComparisonPanel[]) {
-		const a = panels.find((panel) => panel.id === 'a');
-		const b = panels.find((panel) => panel.id === 'b');
-		if (!a || !b) return [];
-
-		return COMPARISON_METRICS.map((metric) => {
-			const value = a.rawBuffedIncrease[metric.id] - b.rawBuffedIncrease[metric.id];
-			return {
-				id: metric.id,
-				label: metric.label,
-				value,
-				valueLabel: formatPointDelta(value)
-			};
-		});
 	}
 
 	function metricCellClass(side: ComparisonSide, isWinner: boolean) {
@@ -1356,8 +711,6 @@
 		return queryMatches(tierName, groupName, ...Object.keys(group), ...Object.values(group).map(formatBuffStats));
 	}
 </script>
-
-<svelte:window onpaste={handleScreenshotPaste} />
 
 <svelte:head>
 	<title>LaTale Damage Calculator</title>
@@ -2105,215 +1458,11 @@
 	</Sheet.Content>
 </Sheet.Root>
 
-<Sheet.Root bind:open={screenshotImportOpen}>
-	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,40rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
-		<Sheet.Header class="border-b border-border/80 px-5 py-4">
-			<Sheet.Title>Import Screenshot</Sheet.Title>
-		</Sheet.Header>
-
-		<div class="space-y-4 p-5">
-			<input
-				bind:this={screenshotImportFileInput}
-				id="screenshot-import-file"
-				class="hidden"
-				type="file"
-				accept="image/png,image/jpeg,image/webp,image/gif"
-				disabled={screenshotImportStatus === 'loading'}
-				hidden
-				tabindex="-1"
-				aria-hidden="true"
-				onchange={handleScreenshotFileChange}
-			/>
-
-			<div
-				role="button"
-				tabindex={screenshotImportStatus === 'loading' ? -1 : 0}
-				aria-controls="screenshot-import-file"
-				aria-disabled={screenshotImportStatus === 'loading'}
-				class={`relative grid min-h-52 overflow-hidden rounded-md border border-dashed transition ${screenshotImportZoneClass()}`}
-				onclick={openScreenshotFilePicker}
-				onkeydown={handleScreenshotImportZoneKeydown}
-				ondragenter={handleScreenshotDragEnter}
-				ondragover={handleScreenshotDragOver}
-				ondragleave={handleScreenshotDragLeave}
-				ondrop={handleScreenshotDrop}
-			>
-				{#if screenshotImportPreviewUrl}
-					<img
-						src={screenshotImportPreviewUrl}
-						alt={screenshotImportFile?.name ?? 'Selected screenshot'}
-						class="h-full max-h-80 min-h-52 w-full object-contain"
-					/>
-					<div class="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 border-t border-border/70 bg-background/92 px-3 py-2 text-xs backdrop-blur">
-						<span class="min-w-0 truncate font-medium text-foreground">
-							{screenshotImportFile?.name}
-						</span>
-						<span class="shrink-0 text-muted-foreground">Change</span>
-					</div>
-				{:else}
-					<div class="grid place-items-center px-5 py-8 text-center">
-						<div class="grid size-12 place-items-center rounded-md border border-border bg-background text-muted-foreground shadow-sm">
-							{#if screenshotImportStatus === 'loading'}
-								<LoaderCircleIcon class="size-6 animate-spin text-primary" />
-							{:else if screenshotImportDragActive}
-								<CloudUploadIcon class="size-6 text-primary" />
-							{:else}
-								<FileImageIcon class="size-6" />
-							{/if}
-						</div>
-						<div class="mt-3 text-sm font-semibold text-foreground">
-							{#if screenshotImportDragActive}
-								Drop screenshot
-							{:else}
-								Choose screenshot
-							{/if}
-						</div>
-						<div class="mt-1 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-							<span>PNG, JPEG, WEBP, GIF</span>
-							<span class="text-border">/</span>
-							<span>8 MB max</span>
-							<span class="text-border">/</span>
-							<span class="inline-flex items-center gap-1">
-								<ClipboardPasteIcon class="size-3.5" />
-								Paste enabled
-							</span>
-						</div>
-					</div>
-				{/if}
-			</div>
-
-			<div class={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${screenshotImportStatusClass()}`}>
-				{#if screenshotImportStatus === 'loading'}
-					<LoaderCircleIcon class="mt-0.5 size-4 shrink-0 animate-spin" />
-				{:else if screenshotImportStatus === 'error'}
-					<CircleAlertIcon class="mt-0.5 size-4 shrink-0" />
-				{:else if screenshotImportHasReviewWarning}
-					<CircleAlertIcon class="mt-0.5 size-4 shrink-0" />
-				{:else if screenshotImportStatus === 'success'}
-					<CheckIcon class="mt-0.5 size-4 shrink-0" />
-				{:else}
-					<FileImageIcon class="mt-0.5 size-4 shrink-0" />
-				{/if}
-				<span class="min-w-0">{screenshotImportStatusText()}</span>
-			</div>
-
-			<div class="flex flex-wrap items-center justify-between gap-2">
-				<div class="flex flex-wrap gap-2">
-					<Button onclick={runScreenshotImport} disabled={!screenshotImportFile || screenshotImportStatus === 'loading'}>
-						{#if screenshotImportStatus === 'loading'}
-							<LoaderCircleIcon data-icon="inline-start" class="animate-spin" />
-						{:else}
-							<CloudUploadIcon data-icon="inline-start" />
-						{/if}
-						Import
-					</Button>
-					<Button variant="outline" onclick={openScreenshotFilePicker} disabled={screenshotImportStatus === 'loading'}>
-						<FileImageIcon data-icon="inline-start" />
-						Choose
-					</Button>
-				</div>
-				<Button
-					variant="ghost"
-					onclick={resetScreenshotImport}
-					disabled={screenshotImportStatus === 'loading'}
-				>
-					<EraserIcon data-icon="inline-start" />
-					Clear
-				</Button>
-			</div>
-
-			{#if screenshotImportResult}
-				<div class="space-y-3 rounded-md border border-border bg-muted/15 p-3">
-					<div class="flex flex-wrap items-center justify-between gap-3">
-						<div class="flex flex-wrap items-center gap-2">
-							<Badge variant="secondary">Suggested {importVariantName(screenshotImportResult.variant)}</Badge>
-							<Badge
-								variant="outline"
-								class={screenshotImportResult.confidence < 0.65
-									? 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-									: ''}
-							>
-								Confidence {formatImportConfidence(screenshotImportResult.confidence)}
-							</Badge>
-							{#if screenshotImportMissing.length > 0}
-								<Badge variant="destructive">{screenshotImportMissing.length} missing</Badge>
-							{/if}
-						</div>
-
-						<div class="inline-grid h-9 grid-cols-2 rounded-md bg-muted p-1">
-							{#each SCREENSHOT_VARIANTS as variant}
-								<button
-									type="button"
-									aria-pressed={screenshotImportVariant === variant}
-									class={`rounded-sm px-3 text-sm font-medium transition ${screenshotImportVariantButtonClass(variant)}`}
-									onclick={() => selectScreenshotImportVariant(variant)}
-								>
-									{importVariantName(variant)}
-								</button>
-							{/each}
-						</div>
-					</div>
-
-					{#if screenshotImportResult.warnings.length > 0}
-						<div class="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
-							<div class="text-xs font-semibold text-amber-900 dark:text-amber-100">Review notes</div>
-							<div class="space-y-1.5">
-								{#each screenshotImportResult.warnings as warning}
-									<div class="flex items-start gap-2 text-xs text-amber-900/85 dark:text-amber-100/85">
-										<CircleAlertIcon class="mt-0.5 size-3.5 shrink-0" />
-										<span class="min-w-0">{warning}</span>
-									</div>
-								{/each}
-							</div>
-						</div>
-					{/if}
-
-					<div class="overflow-hidden rounded-md border border-border bg-background">
-						<Table.Root class="table-fixed text-xs">
-							<Table.Header>
-								<Table.Row>
-									<Table.Head class="h-9 w-[44%] px-3">Stat</Table.Head>
-									<Table.Head class="h-9 w-[28%] px-3 text-right">Flat</Table.Head>
-									<Table.Head class="h-9 w-[28%] px-3 text-right">%</Table.Head>
-								</Table.Row>
-							</Table.Header>
-							<Table.Body>
-								{#each screenshotImportRows as row}
-									<Table.Row class={row.missing ? 'border-l-2 border-l-destructive bg-destructive/5' : 'border-l-2 border-l-transparent'}>
-										<Table.Cell class="px-3 py-2 font-medium">
-											<span class="block truncate">{row.label}</span>
-										</Table.Cell>
-										<Table.Cell class={`px-3 py-2 text-right tabular-nums ${row.values[0] ? '' : 'text-destructive'}`}>
-											{screenshotPreviewValue(row.key, row.values[0], 0)}
-										</Table.Cell>
-										<Table.Cell
-											class={`px-3 py-2 text-right tabular-nums ${
-												PERCENTLESS_STATS.has(row.key) || row.values[1] ? 'text-muted-foreground' : 'text-destructive'
-											}`}
-										>
-											{#if PERCENTLESS_STATS.has(row.key)}
-												---
-											{:else}
-												{screenshotPreviewValue(row.key, row.values[1], 1)}
-											{/if}
-										</Table.Cell>
-									</Table.Row>
-								{/each}
-							</Table.Body>
-						</Table.Root>
-					</div>
-
-					<div class="flex flex-wrap justify-end gap-2">
-						<Button onclick={applyScreenshotImport} disabled={!screenshotImportCanApply}>
-							<CheckIcon data-icon="inline-start" />
-							Apply to Base
-						</Button>
-					</div>
-				</div>
-			{/if}
-		</div>
-	</Sheet.Content>
-</Sheet.Root>
+<ScreenshotImportSheet
+	bind:open={screenshotImportOpen}
+	baseStats={calculator.stats}
+	onApply={applyScreenshotImportResult}
+/>
 
 <Sheet.Root bind:open={transferOpen}>
 	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,36rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
