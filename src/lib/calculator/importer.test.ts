@@ -50,7 +50,7 @@ const baseFields = {
 	magicalMinimumDamagePercent: '38%',
 	physicalMaximumDamagePercent: '33%',
 	magicalMaximumDamagePercent: '28%',
-	physicalStaticDamagePercent: '97%',
+	physicalStaticDamagePercent: '92%',
 	magicalStaticDamagePercent: '64%',
 	normalAddedPercent: '14%',
 	bossAddedPercent: '15%',
@@ -97,7 +97,7 @@ describe('screenshot importer mapping', () => {
 	});
 
 	it('maps physical screenshots to strength and physical columns', () => {
-		expect.assertions(11);
+		expect.assertions(14);
 		const result = mapScreenshotExtraction({
 			variant: 'physical',
 			fields: baseFields,
@@ -116,6 +116,9 @@ describe('screenshot importer mapping', () => {
 		expect(result.stats.normalAmp).toEqual(['67.7', '']);
 		expect(result.stats.ratio).toEqual(['12', '']);
 		expect(result.stats.back).toEqual(['1033', '']);
+		expect(result.variants.physical.strength).toEqual(['4262437', '409']);
+		expect(result.variants.magical.strength).toEqual(['4194643', '409']);
+		expect(result.variants.magical.attack).toEqual(['39764', '339']);
 	});
 
 	it('does not use attack flat ranges as attack percentages', () => {
@@ -132,12 +135,12 @@ describe('screenshot importer mapping', () => {
 		});
 
 		expect(result.stats.attack).toEqual(['55657', '']);
-		expect(result.warnings).toContain('Missing attack');
+		expect(findMissingImportedStats(result.stats)).toContain('attack');
 		expect(result.stats.normalAdded).toEqual(['867057', '14']);
 	});
 
 	it('maps magical screenshots to intelligence and magical columns', () => {
-		expect.assertions(6);
+		expect.assertions(7);
 		const result = mapScreenshotExtraction({
 			variant: 'magical',
 			fields: magicalFields,
@@ -151,9 +154,36 @@ describe('screenshot importer mapping', () => {
 		expect(result.stats.strength).toEqual(['4500000', '409']);
 		expect(result.stats.attack).toEqual(['60000', '339']);
 		expect(result.stats.static).toEqual(['551320', '64']);
+		expect(result.variants.physical.attack).toEqual(['45000', '370']);
 	});
 
-	it('corrects the focus when model output disagrees with power indicators', () => {
+	it('prefers full Static Damage row percentages for physical and magical columns', () => {
+		expect.assertions(4);
+		const result = mapScreenshotExtraction({
+			variant: 'physical',
+			fields: {
+				...baseFields,
+				physicalStaticDamage: '609,763',
+				magicalStaticDamage: '710,129',
+				physicalStaticDamageBonusRow: 'Static Damage +374,088 / 63%',
+				magicalStaticDamageBonusRow: 'Static Damage +388,049 / 83%',
+				physicalStaticDamagePercent: '83%',
+				magicalStaticDamagePercent: '63%'
+			},
+			confidence: 0.93,
+			warnings: []
+		});
+
+		expect(result.stats.static).toEqual(['609763', '63']);
+		expect(result.variants.physical.static).toEqual(['609763', '63']);
+		expect(result.variants.magical.static).toEqual(['710129', '83']);
+		expect(result.warnings).toEqual([
+			'Physical Static Damage percent used 63% from the bonus row instead of 83% from the separate field.',
+			'Magical Static Damage percent used 83% from the bonus row instead of 63% from the separate field.'
+		]);
+	});
+
+	it('selects suggested focus from power indicators while keeping both variants', () => {
 		expect.assertions(5);
 		const result = mapScreenshotExtraction({
 			variant: 'magical',
@@ -165,8 +195,8 @@ describe('screenshot importer mapping', () => {
 		expect(result.variant).toBe('physical');
 		expect(result.stats.strength).toEqual(['4262437', '409']);
 		expect(result.stats.attack).toEqual(['55657', '370']);
-		expect(result.stats.back).toEqual(['1033', '']);
-		expect(result.warnings).toContain('Corrected focus to physical because the power columns indicate that build.');
+		expect(result.variants.magical.strength).toEqual(['4194643', '409']);
+		expect(result.warnings).toEqual([]);
 	});
 
 	it('reports missing required values and merges without touching change panels', () => {
@@ -181,7 +211,7 @@ describe('screenshot importer mapping', () => {
 		const merged = mergeImportedStats(state.stats, result.stats);
 
 		expect(findMissingImportedStats(result.stats)).toEqual(['strength', 'critical']);
-		expect(result.warnings).toContain('Missing strength, critical');
+		expect(result.variants.magical.strength).toEqual(['4194643', '409']);
 		expect(merged.attack).toEqual(['55657', '370']);
 		expect(merged.strength).toEqual(state.stats.strength);
 	});

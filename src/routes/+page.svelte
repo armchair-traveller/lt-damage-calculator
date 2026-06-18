@@ -36,9 +36,11 @@
 		isDisplayedTie
 	} from '$lib/calculator/comparison.js';
 	import {
+		SCREENSHOT_VARIANTS,
 		findMissingImportedStats,
 		mergeImportedStats,
-		type ScreenshotImportResult
+		type ScreenshotImportResult,
+		type ScreenshotVariant
 	} from '$lib/calculator/importer.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -208,6 +210,7 @@
 	let screenshotImportStatus: ScreenshotImportStatus = $state<ScreenshotImportStatus>('idle');
 	let screenshotImportMessage = $state('');
 	let screenshotImportResult: ScreenshotImportResult | null = $state<ScreenshotImportResult | null>(null);
+	let screenshotImportVariant: ScreenshotVariant = $state('physical');
 	let screenshotImportDragActive = $state(false);
 	let screenshotImportApplyNotice = $state('');
 	let screenshotImportApplyNoticeTimeout: number | null = null;
@@ -289,16 +292,21 @@
 	);
 	const hasAChanges = $derived(panelHasEnteredValues(calculator.statsA));
 	const hasBChanges = $derived(panelHasEnteredValues(calculator.statsB));
+	const screenshotImportSelectedStats = $derived(
+		screenshotImportResult
+			? (screenshotImportResult.variants?.[screenshotImportVariant] ?? screenshotImportResult.stats)
+			: null
+	);
 	const screenshotImportMissing = $derived(
-		screenshotImportResult ? findMissingImportedStats(screenshotImportResult.stats) : []
+		screenshotImportSelectedStats ? findMissingImportedStats(screenshotImportSelectedStats) : []
 	);
 	const screenshotImportRows = $derived.by(() => {
-		const result = screenshotImportResult;
-		if (!result) return [];
+		const stats = screenshotImportSelectedStats;
+		if (!stats) return [];
 		return STAT_KEYS.map((key) => ({
 			key,
-			label: STAT_LABELS[key],
-			values: result.stats[key] ?? ['', ''],
+			label: screenshotImportStatLabel(key, screenshotImportVariant),
+			values: stats[key] ?? ['', ''],
 			missing: screenshotImportMissing.includes(key)
 		}));
 	});
@@ -452,6 +460,7 @@
 		screenshotImportStatus = 'idle';
 		screenshotImportMessage = '';
 		screenshotImportResult = null;
+		screenshotImportVariant = 'physical';
 		screenshotImportDragActive = false;
 		if (screenshotImportFileInput) screenshotImportFileInput.value = '';
 	}
@@ -533,6 +542,7 @@
 
 	function selectScreenshotFile(file: File | null) {
 		screenshotImportResult = null;
+		screenshotImportVariant = 'physical';
 		screenshotImportMessage = '';
 		screenshotImportDragActive = false;
 
@@ -590,17 +600,9 @@
 			}
 
 			const result = body as ScreenshotImportResult;
-			const missing = findMissingImportedStats(result.stats);
+			screenshotImportVariant = normalizeImportVariant(result.variant);
 			screenshotImportResult = result;
-
-			if (missing.length > 0) {
-				screenshotImportStatus = 'error';
-				screenshotImportMessage = 'Incomplete extraction.';
-				return;
-			}
-
-			screenshotImportStatus = 'success';
-			screenshotImportMessage = result.confidence < 0.65 ? 'Low confidence. Review values.' : 'Review values.';
+			refreshScreenshotImportReviewStatus();
 		} catch (error) {
 			screenshotImportStatus = 'error';
 			screenshotImportMessage = error instanceof Error ? error.message : 'Screenshot import failed.';
@@ -609,17 +611,20 @@
 
 	function applyScreenshotImport() {
 		if (!screenshotImportResult) return;
-		if (screenshotImportMissing.length > 0) {
+		const selectedStats = screenshotImportSelectedStats;
+		if (!selectedStats) return;
+		if (findMissingImportedStats(selectedStats).length > 0) {
 			screenshotImportStatus = 'error';
 			screenshotImportMessage = 'Incomplete extraction.';
 			return;
 		}
 
-		calculator.stats = mergeImportedStats(calculator.stats, screenshotImportResult.stats);
+		const appliedVariant = screenshotImportVariant;
+		calculator.stats = mergeImportedStats(calculator.stats, selectedStats);
 		clearDraftsForPanel('base');
 		resetScreenshotImport();
 		screenshotImportOpen = false;
-		showScreenshotImportApplyNotice('Base stats updated.');
+		showScreenshotImportApplyNotice(`${importVariantLabel(appliedVariant)} imported.`);
 	}
 
 	function isAcceptedScreenshotFile(file: File) {
@@ -696,8 +701,50 @@
 		return 'cursor-pointer border-border bg-muted/20 text-muted-foreground hover:border-primary/40 hover:bg-muted/35';
 	}
 
-	function importVariantLabel(variant: ScreenshotImportResult['variant']) {
+	function importedStatsForVariant(result: ScreenshotImportResult, variant: ScreenshotVariant) {
+		return result.variants?.[variant] ?? result.stats;
+	}
+
+	function normalizeImportVariant(variant: unknown): ScreenshotVariant {
+		return variant === 'magical' ? 'magical' : 'physical';
+	}
+
+	function selectScreenshotImportVariant(variant: ScreenshotVariant) {
+		screenshotImportVariant = variant;
+		refreshScreenshotImportReviewStatus();
+	}
+
+	function refreshScreenshotImportReviewStatus() {
+		if (!screenshotImportResult) return;
+		const missing = findMissingImportedStats(importedStatsForVariant(screenshotImportResult, screenshotImportVariant));
+		if (missing.length > 0) {
+			screenshotImportStatus = 'error';
+			screenshotImportMessage = 'Incomplete extraction.';
+			return;
+		}
+		screenshotImportStatus = 'success';
+		screenshotImportMessage =
+			screenshotImportResult.confidence < 0.65 ? 'Low confidence. Review values.' : 'Review values.';
+	}
+
+	function importVariantLabel(variant: ScreenshotVariant) {
 		return variant === 'magical' ? 'Magical focus' : 'Physical focus';
+	}
+
+	function importVariantName(variant: ScreenshotVariant) {
+		return variant === 'magical' ? 'Magical' : 'Physical';
+	}
+
+	function screenshotImportStatLabel(key: StatKey, variant: ScreenshotVariant) {
+		if (key === 'strength') return variant === 'magical' ? 'Intelligence' : 'Strength';
+		if (key === 'attack') return variant === 'magical' ? 'Ele. Intensity' : 'Attack';
+		return STAT_LABELS[key];
+	}
+
+	function screenshotImportVariantButtonClass(variant: ScreenshotVariant) {
+		return screenshotImportVariant === variant
+			? 'bg-background text-foreground shadow-sm'
+			: 'text-muted-foreground hover:text-foreground';
 	}
 
 	function screenshotPreviewValue(key: StatKey, value: string, index: 0 | 1) {
@@ -2177,19 +2224,34 @@
 
 			{#if screenshotImportResult}
 				<div class="space-y-3 rounded-md border border-border bg-muted/15 p-3">
-					<div class="flex flex-wrap items-center gap-2">
-						<Badge variant="secondary">{importVariantLabel(screenshotImportResult.variant)}</Badge>
-						<Badge
-							variant="outline"
-							class={screenshotImportResult.confidence < 0.65
-								? 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-								: ''}
-						>
-							Confidence {formatImportConfidence(screenshotImportResult.confidence)}
-						</Badge>
-						{#if screenshotImportMissing.length > 0}
-							<Badge variant="destructive">{screenshotImportMissing.length} missing</Badge>
-						{/if}
+					<div class="flex flex-wrap items-center justify-between gap-3">
+						<div class="flex flex-wrap items-center gap-2">
+							<Badge variant="secondary">Suggested {importVariantName(screenshotImportResult.variant)}</Badge>
+							<Badge
+								variant="outline"
+								class={screenshotImportResult.confidence < 0.65
+									? 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+									: ''}
+							>
+								Confidence {formatImportConfidence(screenshotImportResult.confidence)}
+							</Badge>
+							{#if screenshotImportMissing.length > 0}
+								<Badge variant="destructive">{screenshotImportMissing.length} missing</Badge>
+							{/if}
+						</div>
+
+						<div class="inline-grid h-9 grid-cols-2 rounded-md bg-muted p-1">
+							{#each SCREENSHOT_VARIANTS as variant}
+								<button
+									type="button"
+									aria-pressed={screenshotImportVariant === variant}
+									class={`rounded-sm px-3 text-sm font-medium transition ${screenshotImportVariantButtonClass(variant)}`}
+									onclick={() => selectScreenshotImportVariant(variant)}
+								>
+									{importVariantName(variant)}
+								</button>
+							{/each}
+						</div>
 					</div>
 
 					{#if screenshotImportResult.warnings.length > 0}

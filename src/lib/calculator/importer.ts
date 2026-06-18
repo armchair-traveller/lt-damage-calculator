@@ -2,10 +2,14 @@ import { PERCENTLESS_STATS, STAT_KEYS, type StatKey, type UiStats } from './mode
 
 export type ScreenshotVariant = 'physical' | 'magical';
 export type ImportedStatValues = Partial<Record<StatKey, [string, string]>>;
+export type ScreenshotImportVariants = Record<ScreenshotVariant, ImportedStatValues>;
+
+export const SCREENSHOT_VARIANTS = ['physical', 'magical'] as const satisfies ScreenshotVariant[];
 
 export type ScreenshotImportResult = {
 	variant: ScreenshotVariant;
 	stats: ImportedStatValues;
+	variants: ScreenshotImportVariants;
 	confidence: number;
 	warnings: string[];
 };
@@ -61,7 +65,7 @@ export type ScreenshotExtractionFields = {
 };
 
 export type ScreenshotExtraction = {
-	variant: ScreenshotVariant;
+	variant?: ScreenshotVariant | null;
 	fields: ScreenshotExtractionFields;
 	confidence: number;
 	warnings: string[];
@@ -138,9 +142,34 @@ export function normalizeImportedNumber(value: unknown, range: 'first' | 'last' 
 
 export function mapScreenshotExtraction(extraction: ScreenshotExtraction): ScreenshotImportResult {
 	const fields = extraction.fields;
-	const modelVariant = extraction.variant === 'magical' ? 'magical' : 'physical';
-	const evidence = inferVariantFromFields(fields);
-	const variant = evidence?.variant ?? modelVariant;
+	const variants = mapScreenshotVariants(fields);
+	const variant = selectScreenshotVariant(fields, variants, extraction.variant);
+	const stats = variants[variant];
+	const warnings = [
+		...(Array.isArray(extraction.warnings) ? extraction.warnings : []),
+		...staticDamagePercentWarnings(fields)
+	];
+
+	return {
+		variant,
+		stats,
+		variants,
+		confidence: clampConfidence(extraction.confidence),
+		warnings
+	};
+}
+
+export function mapScreenshotVariants(fields: ScreenshotExtractionFields): ScreenshotImportVariants {
+	return {
+		physical: mapScreenshotVariant(fields, 'physical'),
+		magical: mapScreenshotVariant(fields, 'magical')
+	};
+}
+
+function mapScreenshotVariant(
+	fields: ScreenshotExtractionFields,
+	variant: ScreenshotVariant
+): ImportedStatValues {
 	const focus = <T>(physical: T, magical: T) => (variant === 'magical' ? magical : physical);
 	const stats: ImportedStatValues = {};
 
@@ -190,25 +219,7 @@ export function mapScreenshotExtraction(extraction: ScreenshotExtraction): Scree
 	setStat(stats, 'melee', fields.meleeDamage);
 	setStat(stats, 'abnormal', fields.statusDamage);
 
-	const warnings = [...(Array.isArray(extraction.warnings) ? extraction.warnings : [])];
-	if (evidence && evidence.variant !== modelVariant) {
-		warnings.push(
-			evidence.source === 'power'
-				? `Corrected focus to ${evidence.variant} because the power columns indicate that build.`
-				: `Corrected focus to ${evidence.variant} because the primary stats indicate that build.`
-		);
-	}
-	const missing = findMissingImportedStats(stats);
-	if (missing.length > 0) {
-		warnings.push(`Missing ${missing.map((key) => key).join(', ')}`);
-	}
-
-	return {
-		variant,
-		stats,
-		confidence: clampConfidence(extraction.confidence),
-		warnings
-	};
+	return stats;
 }
 
 export function inferVariantFromFields(fields: ScreenshotExtractionFields): VariantEvidence | null {
@@ -227,6 +238,32 @@ export function inferVariantFromFields(fields: ScreenshotExtractionFields): Vari
 
 	const primaryVariant = majorityVariant(primaryVotes);
 	return primaryVariant ? { variant: primaryVariant, source: 'primary' } : null;
+}
+
+function selectScreenshotVariant(
+	fields: ScreenshotExtractionFields,
+	variants: ScreenshotImportVariants,
+	extractedVariant: unknown
+) {
+	const evidenceVariant = inferVariantFromFields(fields)?.variant;
+	if (evidenceVariant) return evidenceVariant;
+
+	const completeVariant = variantWithFewestMissingStats(variants);
+	if (completeVariant) return completeVariant;
+
+	const legacyVariant = normalizeScreenshotVariant(extractedVariant);
+	return legacyVariant ?? 'physical';
+}
+
+function variantWithFewestMissingStats(variants: ScreenshotImportVariants): ScreenshotVariant | null {
+	const physicalMissing = findMissingImportedStats(variants.physical).length;
+	const magicalMissing = findMissingImportedStats(variants.magical).length;
+	if (physicalMissing === magicalMissing) return null;
+	return physicalMissing < magicalMissing ? 'physical' : 'magical';
+}
+
+function normalizeScreenshotVariant(value: unknown): ScreenshotVariant | null {
+	return value === 'physical' || value === 'magical' ? value : null;
 }
 
 export function mergeImportedStats(current: UiStats, imported: ImportedStatValues): UiStats {
@@ -276,6 +313,28 @@ function majorityVariant(votes: ScreenshotVariant[]) {
 
 function staticDamagePercent(rowText: unknown, percent: unknown) {
 	return rowPercent(rowText, percent);
+}
+
+function staticDamagePercentWarnings(fields: ScreenshotExtractionFields) {
+	return [
+		staticDamagePercentWarning(
+			'Physical',
+			fields.physicalStaticDamageBonusRow,
+			fields.physicalStaticDamagePercent
+		),
+		staticDamagePercentWarning(
+			'Magical',
+			fields.magicalStaticDamageBonusRow,
+			fields.magicalStaticDamagePercent
+		)
+	].filter((warning): warning is string => Boolean(warning));
+}
+
+function staticDamagePercentWarning(label: string, rowText: unknown, percent: unknown) {
+	const rowPercentValue = normalizeReasonablePercent(rowText);
+	const separatePercentValue = normalizeReasonablePercent(percent);
+	if (!rowPercentValue || !separatePercentValue || rowPercentValue === separatePercentValue) return '';
+	return `${label} Static Damage percent used ${rowPercentValue}% from the bonus row instead of ${separatePercentValue}% from the separate field.`;
 }
 
 function attackPercent(rowText: unknown, percent: unknown) {

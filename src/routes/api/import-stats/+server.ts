@@ -7,6 +7,10 @@ import {
 	mapScreenshotExtraction,
 	type ScreenshotExtraction
 } from '$lib/calculator/importer.js';
+import {
+	preprocessScreenshotImage,
+	type PreprocessedScreenshot
+} from '$lib/server/screenshot-preprocessor.js';
 
 export const prerender = false;
 
@@ -18,6 +22,7 @@ const ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/
 type ImportHandlerOptions = {
 	apiKey?: string;
 	fetch?: typeof fetch;
+	preprocessImage?: (bytes: Uint8Array) => Promise<PreprocessedScreenshot>;
 };
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -35,6 +40,14 @@ export async function _handleImportRequest(request: Request, options: ImportHand
 		return json({ message: fileResult.message }, { status: fileResult.status });
 	}
 
+	let image: PreprocessedScreenshot;
+	try {
+		const preprocessImage = options.preprocessImage ?? preprocessScreenshotImage;
+		image = await preprocessImage(fileResult.bytes);
+	} catch {
+		return json({ message: 'Upload a readable screenshot image.' }, { status: 400 });
+	}
+
 	const clientFetch = options.fetch ?? fetch;
 	const response = await clientFetch(OPENAI_RESPONSES_URL, {
 		method: 'POST',
@@ -42,7 +55,7 @@ export async function _handleImportRequest(request: Request, options: ImportHand
 			Authorization: `Bearer ${apiKey}`,
 			'Content-Type': 'application/json'
 		},
-		body: JSON.stringify(buildOpenAIRequest(fileResult.dataUrl))
+		body: JSON.stringify(buildOpenAIRequest(imageDataUrl(image)))
 	});
 
 	if (!response.ok) {
@@ -98,8 +111,12 @@ async function readScreenshotFile(request: Request) {
 
 	return {
 		ok: true as const,
-		dataUrl: `data:${type};base64,${Buffer.from(bytes).toString('base64')}`
+		bytes
 	};
+}
+
+function imageDataUrl(image: PreprocessedScreenshot) {
+	return `data:${image.type};base64,${Buffer.from(image.bytes).toString('base64')}`;
 }
 
 function normalizeMimeType(file: File) {
@@ -134,11 +151,9 @@ function buildOpenAIRequest(imageUrl: string) {
 						text: [
 							'Extract LaTale status-window stats from this screenshot.',
 							'Return only JSON matching the schema.',
-							'Determine whether the build focus is physical or magical.',
-							'The screenshot can show both Physical and Magical columns, so visible columns alone do not determine focus.',
-							'Use the Physical Power and Magical Power Direct Attack and Summon Attack rows as the strongest focus indicators.',
-							'For physical builds use STR, Attack, and Physical column values.',
-							'For magical builds use INT, Ele. Intensity, and Magical column values.',
+							'Do not choose a physical or magical focus; read both variants exactly as visible.',
+							'Read STR and INT separately. Read Attack and Ele. Intensity separately.',
+							'Read both Physical and Magical columns separately wherever the table has both.',
 							'For strengthPercent, read the percent on the Strength row in Additional Details. For intelligencePercent, read the percent on the Intelligence row.',
 							'For attackBonusRow, return the full Additional Details Attack row text, including the flat bonus or range and the percent or percent range.',
 							'For elementalIntensityBonusRow, return the full Additional Details Ele. Intensity row text, including the flat bonus and percent.',
@@ -189,12 +204,8 @@ function extractionSchema() {
 	return {
 		type: 'object',
 		additionalProperties: false,
-		required: ['variant', 'fields', 'confidence', 'warnings'],
+		required: ['fields', 'confidence', 'warnings'],
 		properties: {
-			variant: {
-				type: 'string',
-				enum: ['physical', 'magical']
-			},
 			fields: {
 				type: 'object',
 				additionalProperties: false,
