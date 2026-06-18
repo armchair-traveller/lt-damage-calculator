@@ -58,7 +58,7 @@ const extraction: ScreenshotExtraction = {
 
 describe('screenshot stat import route', () => {
 	it('returns mapped stats from a mocked OpenAI response', async () => {
-		expect.assertions(15);
+		expect.assertions(17);
 		const uploadBytes = new Uint8Array([1, 2, 3, 4]);
 		const processedBytes = new Uint8Array([137, 80, 78, 71]);
 		const preprocessMock = vi.fn(async (bytes: Uint8Array) => {
@@ -68,11 +68,15 @@ describe('screenshot stat import route', () => {
 		const fetchMock = vi.fn(async (_url: URL | RequestInfo, init?: RequestInit) => {
 			const body = JSON.parse(String(init?.body)) as {
 				model: string;
-				input: Array<{ content: Array<{ type: string; detail?: string; image_url?: string }> }>;
+				reasoning: { effort: string };
+				input: Array<{ content: Array<{ type: string; detail?: string; image_url?: string; text?: string }> }>;
 				text: { format: { schema: { required: string[]; properties: Record<string, unknown> } } };
 			};
 			const image = body.input[0].content.find((item) => item.type === 'input_image');
+			const prompt = body.input[0].content.find((item) => item.type === 'input_text');
 			expect(body.model).toBe('gpt-5.4-mini');
+			expect(body.reasoning.effort).toBe('none');
+			expect(prompt?.text).toContain('Step order:');
 			expect(image?.detail).toBe('high');
 			expect(image?.image_url).toBe(`data:image/png;base64,${Buffer.from(processedBytes).toString('base64')}`);
 			expect(body.text.format.schema.required).not.toContain('variant');

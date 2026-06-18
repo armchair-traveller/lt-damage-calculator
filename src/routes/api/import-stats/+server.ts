@@ -18,6 +18,42 @@ const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MODEL = 'gpt-5.4-mini';
 const ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const SCREENSHOT_IMPORT_PROMPT = [
+	'Role: Extract LaTale status-window stats from one screenshot for a stat-import tool.',
+	'Critical rules:',
+	'- Return only the final JSON object that matches the schema. After the final JSON, output nothing further.',
+	'- Do not ask a follow-up question, explain the extraction, or choose a physical or magical focus.',
+	'- Extract both physical and magical variants exactly as visible.',
+	'- Use null for any value that is hidden, unreadable, absent, or not clearly tied to the requested field.',
+	'- Do not guess from nearby rows. Add a short warning for ambiguous, hidden, or low-confidence values.',
+	'- Keep numeric text exact; include commas or percent signs only if they appear. When a stat is shown as a range, use the higher or right-side value.',
+	'Step order:',
+	'1. Read the main status values: STR, INT, Attack, and Ele. Intensity. Keep STR separate from INT and Attack separate from Ele. Intensity.',
+	'2. Read both Physical and Magical columns separately wherever a table has both columns.',
+	'3. Read Additional Details rows for Strength, Intelligence, Attack, Ele. Intensity, Normal Add. DMG, and Boss Add. DMG.',
+	'4. Read the lower Physical/Magical table rows for Critical Damage, Minimum Damage, Maximum Damage, Static Damage, Strength/Magic, Back Attack Damage, Physical Power, and Magical Power.',
+	'5. Read the lower Detailed Stats Normal/Boss table rows for Added Damage and Damage Amplification.',
+	'6. Read Melee Damage and Status Damage if visible.',
+	'7. Before finalizing, verify every schema field was either filled from visible text or set to null.',
+	'Field rules:',
+	'- For strengthPercent, read the percent on the Strength row in Additional Details. For intelligencePercent, read the percent on the Intelligence row.',
+	'- For attackBonusRow, return the full Additional Details Attack row text, including the flat bonus or range and the percent or percent range if visible.',
+	'- For elementalIntensityBonusRow, return the full Additional Details Ele. Intensity row text, including the flat bonus and percent if visible.',
+	'- For attackPercent and elementalIntensityPercent, read the rightmost percent or percent range from those same rows.',
+	'- For detailedNormalAddedFlat and detailedBossAddedFlat, read the lower Detailed Stats table row named Added Damage under the Normal and Boss columns.',
+	'- For detailedNormalAmpFlat and detailedBossAmpFlat, read the lower Detailed Stats table row named Damage Amplification under the Normal and Boss columns.',
+	'- For normalAddedFlat, bossAddedFlat, normalAmpFlat, and bossAmpFlat, do not use the Additional Details bonus rows; prefer the Detailed Stats Normal/Boss table values.',
+	'- For normalAddedPercent and bossAddedPercent, use the Additional Details Normal Add. DMG and Boss Add. DMG percent values.',
+	'- For statRatioPercent, read the lower Physical/Magical table row named Strength/Magic; do not use this value as strengthPercent or intelligencePercent.',
+	'- For physicalStaticDamagePercent and magicalStaticDamagePercent, read the percent on the Static Damage row in the lower Physical/Magical table, next to the Static Damage bonus flat value.',
+	'- For physicalStaticDamageBonusRow and magicalStaticDamageBonusRow, return the full lower-table Static Damage row text for each column, including the bonus flat value and slash percent.',
+	'- Do not use the Detailed Stats Def. Penetration value as any Static Damage percent.',
+	'- Extract both Physical Power and Magical Power indicator values even though they are not imported into base stats.',
+	'Output:',
+	'- fields: include every schema field.',
+	'- confidence: a number from 0 to 1 based on screenshot readability and extraction certainty.',
+	'- warnings: concise strings; use [] when there are no issues.'
+].join('\n');
 
 type ImportHandlerOptions = {
 	apiKey?: string;
@@ -148,29 +184,7 @@ function buildOpenAIRequest(imageUrl: string) {
 				content: [
 					{
 						type: 'input_text',
-						text: [
-							'Extract LaTale status-window stats from this screenshot.',
-							'Return only JSON matching the schema.',
-							'Do not choose a physical or magical focus; read both variants exactly as visible.',
-							'Read STR and INT separately. Read Attack and Ele. Intensity separately.',
-							'Read both Physical and Magical columns separately wherever the table has both.',
-							'For strengthPercent, read the percent on the Strength row in Additional Details. For intelligencePercent, read the percent on the Intelligence row.',
-							'For attackBonusRow, return the full Additional Details Attack row text, including the flat bonus or range and the percent or percent range.',
-							'For elementalIntensityBonusRow, return the full Additional Details Ele. Intensity row text, including the flat bonus and percent.',
-							'For attackPercent and elementalIntensityPercent, read the rightmost percent or percent range from those same rows.',
-							'For detailedNormalAddedFlat and detailedBossAddedFlat, read the lower Detailed Stats table row named Added Damage under the Normal and Boss columns.',
-							'For detailedNormalAmpFlat and detailedBossAmpFlat, read the lower Detailed Stats table row named Damage Amplification under the Normal and Boss columns.',
-							'For normalAddedFlat, bossAddedFlat, normalAmpFlat, and bossAmpFlat, do not use the Additional Details bonus rows; prefer the Detailed Stats Normal/Boss table values.',
-							'For normalAddedPercent and bossAddedPercent, use the Additional Details Normal Add. DMG and Boss Add. DMG percent values.',
-							'For statRatioPercent, read the lower Physical/Magical table row named Strength/Magic; do not use this value as strengthPercent or intelligencePercent.',
-							'For physicalStaticDamagePercent and magicalStaticDamagePercent, read the percent on the Static Damage row in the lower Physical/Magical table, next to the Static Damage bonus flat value.',
-							'For physicalStaticDamageBonusRow and magicalStaticDamageBonusRow, return the full lower-table Static Damage row text for each column, including the bonus flat value and slash percent.',
-							'Do not use the Detailed Stats Def. Penetration value as any Static Damage percent.',
-							'Extract both Physical Power and Magical Power indicator values even though they are not imported into base stats.',
-							'When a stat is shown as a range, use the higher/right-side value.',
-							'Keep numeric text exact; include commas or percent signs only if they appear.',
-							'Use null for any value that is hidden, unreadable, or absent.'
-						].join(' ')
+						text: SCREENSHOT_IMPORT_PROMPT
 					},
 					{
 						type: 'input_image',
