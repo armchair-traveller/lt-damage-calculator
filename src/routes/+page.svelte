@@ -1,9 +1,10 @@
 <svelte:options runes={true} />
 
 <script lang="ts">
-	import { browser } from '$app/environment';
 	import favicon from '$lib/assets/favicon.ico';
-	import { tick } from 'svelte';
+	import { onMount, tick } from 'svelte';
+	import type { Attachment } from 'svelte/attachments';
+	import { SvelteSet } from 'svelte/reactivity';
 	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 	import BadgePercentIcon from '@lucide/svelte/icons/badge-percent';
 	import BarChart3Icon from '@lucide/svelte/icons/bar-chart-3';
@@ -142,7 +143,7 @@
 	let calculator: CalculatorState = $state(createDefaultState());
 	let hydrated = $state(false);
 	let classPresetOpen = $state(false);
-	let classPresetTrigger: HTMLButtonElement | null = $state(null);
+	let classPresetTrigger: HTMLButtonElement | null = null;
 	let buffsOpen = $state(false);
 	let equivalenceOpen = $state(false);
 	let auditOpen = $state(false);
@@ -156,10 +157,9 @@
 	let equivalenceTab = $state('damage');
 	let mobileStatsTab = $state('base');
 	let focusedStatInput = $state('');
-	let draftStatInputs: Record<string, string> = $state({});
+	let draftStatInputs = $state.raw<Record<string, string>>({});
 	let equivalenceValues = $state({ perc: 1, critical: 10 });
-	let showStickyVerdict = $state(false);
-	const visiblePrimaryVerdicts = new Set<Element>();
+	const visiblePrimaryVerdicts = new SvelteSet<Element>();
 
 	const report = $derived(calculateDashboard(calculator));
 	const activeClassPreset = $derived(matchClassPreset(calculator.settings));
@@ -202,6 +202,7 @@
 	const changeSummary = $derived(
 		hasMeaningfulComparison ? summarizeChangeComparison(comparisonPanels) : undefined
 	);
+	const showStickyVerdict = $derived(Boolean(changeSummary) && visiblePrimaryVerdicts.size === 0);
 	const comparisonMatrixRows = $derived(
 		hasMeaningfulComparison ? buildComparisonMatrixRows(comparisonPanels) : []
 	);
@@ -225,8 +226,7 @@
 	const hasAChanges = $derived(panelHasEnteredValues(calculator.statsA));
 	const hasBChanges = $derived(panelHasEnteredValues(calculator.statsB));
 
-	$effect(() => {
-		if (!browser || hydrated) return;
+	onMount(() => {
 		const stored = window.localStorage.getItem(STORAGE_KEY);
 		if (stored) {
 			calculator = parseStoredState(stored);
@@ -238,12 +238,11 @@
 	});
 
 	$effect(() => {
-		if (!browser || !hydrated) return;
+		if (!hydrated) return;
 		window.localStorage.setItem(STORAGE_KEY, serializeState(calculator));
 	});
 
 	$effect(() => {
-		if (!browser) return;
 		return () => {
 			if (screenshotImportApplyNoticeTimeout !== null) {
 				window.clearTimeout(screenshotImportApplyNoticeTimeout);
@@ -251,8 +250,14 @@
 		};
 	});
 
+	const classPresetTriggerAttachment: Attachment<HTMLButtonElement> = (node) => {
+		classPresetTrigger = node;
+		return () => {
+			if (classPresetTrigger === node) classPresetTrigger = null;
+		};
+	};
+
 	function readLegacyState() {
-		if (!browser) return null;
 		const legacyKeys = ['ltdcStats', 'ltdcStatsA', 'ltdcStatsB', 'ltdcSettings', 'ltdcSelectedBuffs'];
 		if (!legacyKeys.some((key) => window.localStorage.getItem(key) !== null)) return null;
 		return {
@@ -345,7 +350,7 @@
 	}
 
 	async function copyTransfer() {
-		if (!browser || !transferText) return;
+		if (!transferText) return;
 		await navigator.clipboard.writeText(transferText);
 		transferStatus = 'Copied.';
 	}
@@ -358,7 +363,6 @@
 
 	function showScreenshotImportApplyNotice(message: string) {
 		screenshotImportApplyNotice = message;
-		if (!browser) return;
 		if (screenshotImportApplyNoticeTimeout !== null) {
 			window.clearTimeout(screenshotImportApplyNoticeTimeout);
 		}
@@ -370,7 +374,7 @@
 
 	function clearScreenshotImportApplyNotice() {
 		screenshotImportApplyNotice = '';
-		if (!browser || screenshotImportApplyNoticeTimeout === null) return;
+		if (screenshotImportApplyNoticeTimeout === null) return;
 		window.clearTimeout(screenshotImportApplyNoticeTimeout);
 		screenshotImportApplyNoticeTimeout = null;
 	}
@@ -507,7 +511,6 @@
 	}
 
 	function moveStatFocus(panelId: string, key: StatKey, index: 0 | 1, direction: 1 | -1) {
-		if (!browser) return;
 		const currentIndex = STAT_KEYS.indexOf(key);
 		for (let offset = currentIndex + direction; offset >= 0 && offset < STAT_KEYS.length; offset += direction) {
 			const nextKey = STAT_KEYS[offset];
@@ -649,33 +652,23 @@
 		return value > 0 ? `left: 50%; width: ${width}%;` : `right: 50%; width: ${width}%;`;
 	}
 
-	function syncStickyVerdict() {
-		showStickyVerdict = Boolean(changeSummary) && visiblePrimaryVerdicts.size === 0;
-	}
-
-	function observePrimaryVerdict(node: HTMLElement) {
-		if (!browser) return {};
+	const observePrimaryVerdict: Attachment<HTMLElement> = (node) => {
 		const observer = new IntersectionObserver(
 			([entry]) => {
 				if (entry.isIntersecting) visiblePrimaryVerdicts.add(node);
 				else visiblePrimaryVerdicts.delete(node);
-				syncStickyVerdict();
 			},
 			{ threshold: 0.01 }
 		);
 
 		observer.observe(node);
-		return {
-			destroy() {
-				visiblePrimaryVerdicts.delete(node);
-				observer.disconnect();
-				syncStickyVerdict();
-			}
+		return () => {
+			visiblePrimaryVerdicts.delete(node);
+			observer.disconnect();
 		};
-	}
+	};
 
 	function scrollToSection(id: string) {
-		if (!browser) return;
 		document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 	}
 
@@ -922,7 +915,7 @@
 
 			{#if changeSummary}
 				<div
-					use:observePrimaryVerdict
+					{@attach observePrimaryVerdict}
 					class={`grid grid-cols-2 gap-x-4 gap-y-2 border-b px-4 py-3 sm:grid-cols-[minmax(0,1fr)_8rem_8rem] sm:items-center xl:hidden ${verdictBandClass(changeSummary.outcome)}`}
 				>
 					<div class="col-span-2 min-w-0 sm:col-span-1">
@@ -989,12 +982,12 @@
 						<div class="px-2 py-1.5 text-right">%</div>
 					</div>
 
-					{#each STAT_GROUPS as group}
+					{#each STAT_GROUPS as group (group.label)}
 						<div class="grid grid-cols-[11rem_repeat(4,minmax(5.25rem,1fr))_minmax(8.75rem,0.85fr)_repeat(2,minmax(5.25rem,1fr))]">
 							<div class="col-span-8 border-b border-border/80 bg-muted/35 px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
 								{group.label}
 							</div>
-							{#each group.keys as key}
+							{#each group.keys as key (key)}
 								<div class="contents group/row">
 									<div class="sticky left-0 z-10 flex min-h-10 items-center border-b border-r border-border/70 bg-card/95 px-3 transition-colors group-hover/row:bg-muted/25 group-focus-within/row:bg-muted/30">
 										<Label
@@ -1042,7 +1035,7 @@
 				</div>
 				{#if changeSummary}
 					<div
-						use:observePrimaryVerdict
+						{@attach observePrimaryVerdict}
 						class={`hidden border-b px-4 py-3 xl:block ${verdictBandClass(changeSummary.outcome)}`}
 					>
 						<div class="flex items-start justify-between gap-3">
@@ -1076,12 +1069,12 @@
 								</div>
 								<div class="grid grid-cols-[1.75rem_repeat(3,minmax(0,1fr))] gap-1 sm:grid-cols-[2.25rem_repeat(3,minmax(0,1fr))] sm:gap-1.5">
 									<div></div>
-									{#each COMPARISON_METRICS as metric}
+									{#each COMPARISON_METRICS as metric (metric.id)}
 										<div class="px-0.5 text-center text-[11px] font-medium text-muted-foreground">
 											{metric.label}
 										</div>
 									{/each}
-									{#each comparisonMatrixRows as row}
+									{#each comparisonMatrixRows as row (row.id)}
 										<div class="grid place-items-center">
 											<Badge
 												variant="outline"
@@ -1092,7 +1085,7 @@
 												{row.label}
 											</Badge>
 										</div>
-										{#each row.metrics as cell}
+										{#each row.metrics as cell (cell.id)}
 											<div
 												class={`min-w-0 rounded-md border px-1 py-1.5 text-center sm:px-2 ${metricCellClass(row.id, cell.isWinner)}`}
 											>
@@ -1129,7 +1122,7 @@
 										</Tooltip.Root>
 									</div>
 								</div>
-								{#each comparisonDeltas as delta}
+								{#each comparisonDeltas as delta (delta.id)}
 									<div class="grid grid-cols-[3.25rem_minmax(0,1fr)_5.75rem] items-center gap-2 text-xs">
 										<span class="truncate text-muted-foreground">{delta.label}</span>
 										<div class="relative h-4 overflow-hidden rounded-sm bg-muted/70">
@@ -1163,7 +1156,7 @@
 								{#snippet child({ props })}
 									<Button
 										{...props}
-										bind:ref={classPresetTrigger}
+										{@attach classPresetTriggerAttachment}
 										id="class-preset"
 										variant="outline"
 										role="combobox"
@@ -1185,7 +1178,7 @@
 									<Command.List class="max-h-64">
 										<Command.Empty>No class found.</Command.Empty>
 										<Command.Group>
-											{#each Object.keys(CLASS_PRESETS) as preset}
+											{#each Object.keys(CLASS_PRESETS) as preset (preset)}
 												<Command.Item
 													value={preset}
 													class="[&_.cn-command-item-indicator]:hidden"
@@ -1208,7 +1201,7 @@
 						<div class="space-y-2">
 							<Label for="target">Target</Label>
 							<NativeSelect id="target" bind:value={calculator.settings.target} class="w-full">
-								{#each Object.entries(TARGETS) as [key, target]}
+								{#each Object.entries(TARGETS) as [key, target] (key)}
 									<NativeSelectOption value={key}>{target.label}</NativeSelectOption>
 								{/each}
 							</NativeSelect>
@@ -1228,7 +1221,7 @@
 					</div>
 
 					<div class="grid grid-cols-2 gap-2">
-						{#each QUICK_FACTOR_PRESETS as preset}
+						{#each QUICK_FACTOR_PRESETS as preset (preset.label)}
 							<Button
 								variant="secondary"
 								size="sm"
@@ -1300,7 +1293,7 @@
 				<div class="max-h-[22rem] overflow-y-auto p-4">
 					{#if buffDeltaRows.length}
 						<div class="space-y-2">
-							{#each buffDeltaRows as row}
+							{#each buffDeltaRows as row (row.key)}
 								<div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border/60 pb-2 text-xs last:border-b-0 last:pb-0">
 									<span class="truncate text-muted-foreground">{row.label}</span>
 									<span class="font-medium tabular-nums">{formatBuffPair(row.flat, row.percent)}</span>
@@ -1332,7 +1325,7 @@
 			</div>
 
 			<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
-				{#each Object.keys(buffs) as tier}
+				{#each Object.keys(buffs) as tier (tier)}
 					<Button
 						variant="secondary"
 						size="sm"
@@ -1345,16 +1338,16 @@
 			</div>
 
 			<div class="space-y-6">
-				{#each Object.entries(buffs) as [tierName, tier]}
+				{#each Object.entries(buffs) as [tierName, tier] (tierName)}
 					<section>
 						<div class="mb-3 flex items-center gap-3">
 							<h3 class="text-sm font-semibold">{tierName}</h3>
 							<div class="h-px flex-1 bg-border"></div>
 						</div>
 						<div class="grid gap-3 sm:grid-cols-2">
-							{#each Object.entries(tier) as [groupName, group]}
+							{#each Object.entries(tier) as [groupName, group] (groupName)}
 								{#if groupName === 'single'}
-									{#each Object.entries(group) as [buffName, buffStats]}
+									{#each Object.entries(group) as [buffName, buffStats] (buffName)}
 										{#if buffMatches(tierName, buffName, buffStats as Partial<Record<StatKey, [number, number]>>)}
 											<label class="flex items-start gap-3 border-b border-border/60 py-2 transition hover:bg-muted/50">
 												<Checkbox
@@ -1380,7 +1373,7 @@
 												setBuffs(setChoiceBuff(calculator.selectedBuffs, tierName, groupName, inputValue(event)))}
 										>
 											<NativeSelectOption value="None">None</NativeSelectOption>
-											{#each Object.keys(group) as buffName}
+											{#each Object.keys(group) as buffName (buffName)}
 												<NativeSelectOption value={buffName}>{buffName}</NativeSelectOption>
 											{/each}
 										</NativeSelect>
@@ -1420,7 +1413,7 @@
 				</div>
 				<div class="max-h-[24rem] overflow-y-auto p-4">
 					<div class="space-y-2">
-						{#each STAT_KEYS as key}
+						{#each STAT_KEYS as key (key)}
 							<div class="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-border/60 pb-2 text-xs last:border-b-0 last:pb-0">
 								<span class="truncate text-muted-foreground">{STAT_LABELS[key]}</span>
 								<span class="font-medium tabular-nums">{buffedUiStats[key][0]}</span>
@@ -1437,7 +1430,7 @@
 					<h2 class="text-sm font-semibold">Target Profile</h2>
 				</div>
 				<div class="grid gap-3 p-4">
-					{#each ENEMY_TYPES as enemy}
+					{#each ENEMY_TYPES as enemy (enemy)}
 						<div class="space-y-2 border-b border-border/70 pb-3 last:border-b-0 last:pb-0">
 							<div class="text-xs font-semibold uppercase text-muted-foreground">{enemy}</div>
 							<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
@@ -1558,12 +1551,12 @@
 			<div class="px-2 py-2 text-right">Value</div>
 			<div class="px-2 py-2 text-right">%</div>
 		</div>
-		{#each STAT_GROUPS as group}
+		{#each STAT_GROUPS as group (group.label)}
 			<div class="grid grid-cols-[minmax(0,1fr)_6rem_4.75rem]">
 				<div class="col-span-3 border-y border-border/70 bg-background/70 px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
 					{group.label}
 				</div>
-				{#each group.keys as key}
+				{#each group.keys as key (key)}
 					<div class="contents group/row">
 						<div class="flex min-h-10 items-center border-b border-border/70 px-3 transition-colors group-hover/row:bg-muted/25 group-focus-within/row:bg-muted/30">
 							<Label
@@ -1628,7 +1621,7 @@
 	<fieldset class="space-y-2">
 		<legend class="text-sm font-medium">{label}</legend>
 		<div class="grid grid-cols-2 rounded-md bg-muted p-1">
-			{#each options as option}
+			{#each options as option (option)}
 				<label
 					class={`relative flex h-8 cursor-pointer items-center justify-center rounded-sm text-xs font-medium tabular-nums transition-all has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/30 ${
 						value === option
@@ -1723,7 +1716,7 @@
 				</Table.TableRow>
 			</Table.TableHeader>
 			<Table.TableBody>
-				{#each STAT_KEYS as key}
+				{#each STAT_KEYS as key (key)}
 					<Table.TableRow>
 						<Table.TableCell>{STAT_LABELS[key]}</Table.TableCell>
 						<Table.TableCell class="text-right font-mono text-xs">{values[key][0]}</Table.TableCell>

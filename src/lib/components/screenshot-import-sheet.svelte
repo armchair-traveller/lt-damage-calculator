@@ -1,7 +1,7 @@
 <svelte:options runes={true} />
 
 <script lang="ts">
-	import { browser } from '$app/environment';
+	import type { Attachment } from 'svelte/attachments';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import ClipboardPasteIcon from '@lucide/svelte/icons/clipboard-paste';
@@ -38,11 +38,11 @@
 
 	let { open = $bindable(false), baseStats, onApply }: Props = $props();
 	let file: File | null = $state<File | null>(null);
-	let fileInput: HTMLInputElement | null = $state<HTMLInputElement | null>(null);
+	let fileInput: HTMLInputElement | null = null;
 	let previewUrl = $state('');
 	let status: ScreenshotImportStatus = $state<ScreenshotImportStatus>('idle');
 	let message = $state('');
-	let result: ScreenshotImportResult | null = $state<ScreenshotImportResult | null>(null);
+	let result = $state.raw<ScreenshotImportResult | null>(null);
 	let variant: ScreenshotVariant = $state('physical');
 	let dragActive = $state(false);
 
@@ -58,10 +58,20 @@
 			missing: missingStats.includes(key)
 		}));
 	});
+	const warningRows = $derived(
+		result ? result.warnings.map((warning, index) => ({ id: `${index}:${warning}`, warning })) : []
+	);
 	const canApply = $derived(Boolean(result && missingStats.length === 0 && status !== 'loading'));
 	const hasReviewWarning = $derived(
 		Boolean(result && (result.confidence < 0.65 || result.warnings.length > 0 || missingStats.length > 0))
 	);
+
+	const fileInputAttachment: Attachment<HTMLInputElement> = (node) => {
+		fileInput = node;
+		return () => {
+			if (fileInput === node) fileInput = null;
+		};
+	};
 
 	$effect(() => {
 		const objectUrl = previewUrl;
@@ -186,7 +196,7 @@
 		}
 
 		file = nextFile;
-		previewUrl = browser ? URL.createObjectURL(nextFile) : '';
+		previewUrl = URL.createObjectURL(nextFile);
 		status = 'ready';
 		message = `${nextFile.name} (${formatFileSize(nextFile.size)})`;
 		if (fileInput) fileInput.value = '';
@@ -365,7 +375,7 @@
 
 		<div class="space-y-4 p-5">
 			<input
-				bind:this={fileInput}
+				{@attach fileInputAttachment}
 				id="screenshot-import-file"
 				class="hidden"
 				type="file"
@@ -489,7 +499,7 @@
 						</div>
 
 						<div class="inline-grid h-9 grid-cols-2 rounded-md bg-muted p-1">
-							{#each SCREENSHOT_VARIANTS as screenshotVariant}
+							{#each SCREENSHOT_VARIANTS as screenshotVariant (screenshotVariant)}
 								<button
 									type="button"
 									aria-pressed={variant === screenshotVariant}
@@ -502,14 +512,14 @@
 						</div>
 					</div>
 
-					{#if result.warnings.length > 0}
+					{#if warningRows.length > 0}
 						<div class="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
 							<div class="text-xs font-semibold text-amber-900 dark:text-amber-100">Review notes</div>
 							<div class="space-y-1.5">
-								{#each result.warnings as warning}
+								{#each warningRows as row (row.id)}
 									<div class="flex items-start gap-2 text-xs text-amber-900/85 dark:text-amber-100/85">
 										<CircleAlertIcon class="mt-0.5 size-3.5 shrink-0" />
-										<span class="min-w-0">{warning}</span>
+										<span class="min-w-0">{row.warning}</span>
 									</div>
 								{/each}
 							</div>
@@ -526,7 +536,7 @@
 								</Table.Row>
 							</Table.Header>
 							<Table.Body>
-								{#each rows as row}
+								{#each rows as row (row.key)}
 									<Table.Row class={row.missing ? 'border-l-2 border-l-destructive bg-destructive/5' : 'border-l-2 border-l-transparent'}>
 										<Table.Cell class="px-3 py-2 font-medium">
 											<span class="block truncate">{row.label}</span>
