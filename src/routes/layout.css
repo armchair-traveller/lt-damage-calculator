@@ -288,6 +288,34 @@
 	display: block;
 }
 
+.class-art-picker-row {
+	display: flex;
+	align-items: center;
+	gap: 0.55rem;
+	margin-top: 1rem;
+}
+
+.class-art-picker[data-slot='button'] {
+	max-width: 15rem;
+	min-height: 2.35rem;
+	border-color: var(--rail-ink);
+	background: #fffdf7;
+	color: var(--rail-ink);
+	box-shadow: 3px 3px 0 var(--rail-ink);
+}
+
+.class-art-modified {
+	padding: 0.26rem 0.48rem;
+	border: 1.5px solid var(--rail-ink);
+	border-radius: 999px;
+	background: #ff85b8;
+	font-size: 0.58rem;
+	font-weight: 850;
+	letter-spacing: 0.06em;
+	line-height: 1;
+	text-transform: uppercase;
+}
+
 .class-art-orbit {
 	position: absolute;
 	top: -4rem;
@@ -305,44 +333,6 @@
 
 .class-art-orbit span {
 	font-size: 1.25rem;
-}
-
-.class-art-badge {
-	position: absolute;
-	bottom: 1.2rem;
-	left: 1.4rem;
-	z-index: 4;
-	display: inline-flex;
-	align-items: center;
-	gap: 0.55rem;
-	max-width: 18rem;
-	padding: 0.28rem 0.7rem 0.28rem 0.34rem;
-	border: 2px solid var(--rail-ink);
-	border-radius: 999px;
-	background: #fffdf7;
-	box-shadow: 4px 4px 0 var(--rail-ink);
-	font-size: 0.65rem;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
-}
-
-.class-art-badge span {
-	display: grid;
-	width: 1.8rem;
-	aspect-ratio: 1;
-	place-items: center;
-	border-radius: 50%;
-	background: #0875f5;
-	color: white;
-	font-size: 0.56rem;
-	font-weight: 850;
-}
-
-.class-art-badge strong {
-	overflow: hidden;
-	font-weight: 850;
-	text-overflow: ellipsis;
-	white-space: nowrap;
 }
 
 .class-art-stage {
@@ -749,18 +739,22 @@
 		font-size: clamp(2rem, 2.5vw, 2.35rem);
 	}
 
+	.class-art-picker-row {
+		align-items: flex-start;
+		flex-direction: column;
+		gap: 0.7rem;
+		margin-top: 1.15rem;
+	}
+
+	.class-art-picker[data-slot='button'] {
+		max-width: 100%;
+	}
+
 	.class-art-orbit {
 		top: 24%;
 		right: -3.7rem;
 		width: 8.4rem;
 		box-shadow: inset 0 0 0 14px #ffd632;
-	}
-
-	.class-art-badge {
-		top: 26%;
-		bottom: auto;
-		left: 1.55rem;
-		max-width: calc(100% - 3.1rem);
 	}
 
 	.class-art-stage {
@@ -864,14 +858,24 @@
 		font-size: clamp(1.35rem, 7vw, 1.75rem);
 	}
 
+	.class-art-picker-row {
+		margin-top: 0.7rem;
+	}
+
+	.class-art-picker[data-slot='button'] {
+		max-width: 11rem;
+		min-height: 2.15rem;
+		font-size: 0.7rem;
+	}
+
+	.class-art-modified {
+		display: none;
+	}
+
 	.class-art-orbit {
 		top: -4rem;
 		right: 24%;
 		width: 7rem;
-	}
-
-	.class-art-badge {
-		display: none;
 	}
 
 	.class-art-stage {
