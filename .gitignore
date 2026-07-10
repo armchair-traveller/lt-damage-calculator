@@ -41,3 +41,7 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Local design studies and screenshots
+/design-explorations/
+/.design-exploration/

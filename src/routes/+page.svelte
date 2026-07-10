@@ -27,6 +27,7 @@
 	import TargetIcon from '@lucide/svelte/icons/target';
 	import UploadIcon from '@lucide/svelte/icons/upload';
 	import XIcon from '@lucide/svelte/icons/x';
+	import { getClassArt } from '$lib/calculator/class-art.js';
 	import { isDisplayedTie } from '$lib/calculator/comparison.js';
 	import {
 		buildComparisonDeltas,
@@ -70,6 +71,7 @@
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import ClassArtRail from '$lib/components/class-art-rail.svelte';
 	import ScreenshotImportSheet from '$lib/components/screenshot-import-sheet.svelte';
 	import ThemeToggle from '$lib/components/theme-toggle.svelte';
 	import {
@@ -144,6 +146,7 @@
 	let hydrated = $state(false);
 	let classPresetOpen = $state(false);
 	let classPresetTrigger: HTMLButtonElement | null = null;
+	let classPresetStatus = $state('');
 	let buffsOpen = $state(false);
 	let equivalenceOpen = $state(false);
 	let auditOpen = $state(false);
@@ -163,6 +166,11 @@
 
 	const report = $derived(calculateDashboard(calculator));
 	const activeClassPreset = $derived(matchClassPreset(calculator.settings));
+	const selectedClassPreset = $derived(calculator.selectedClassPreset ?? activeClassPreset ?? null);
+	const selectedClassArt = $derived(getClassArt(selectedClassPreset));
+	const classPresetCustomized = $derived(
+		Boolean(calculator.selectedClassPreset) && activeClassPreset !== calculator.selectedClassPreset
+	);
 	const buffedUiStats = $derived(numericStatsToUi(report.buffedStats));
 	const equivalence = $derived(calculateEquivalenceTables(calculator, equivalenceValues));
 	const activeBuffCount = $derived(countActiveBuffs(calculator.selectedBuffs));
@@ -325,9 +333,17 @@
 
 	async function selectClassPreset(presetName: string) {
 		calculator.settings = applyClassPreset(calculator.settings, presetName);
+		calculator.selectedClassPreset = presetName;
+		classPresetStatus = `${presetName} preset applied. Character artwork updated.`;
 		classPresetOpen = false;
 		await tick();
 		classPresetTrigger?.focus();
+	}
+
+	async function openClassPresetPicker() {
+		document.getElementById('class-preset')?.scrollIntoView({ block: 'center' });
+		await tick();
+		classPresetOpen = true;
 	}
 
 	function updateSlider(key: 'summonWeight' | 'backWeight' | 'minWeight' | 'bossWeight', value: number) {
@@ -619,9 +635,9 @@
 	}
 
 	function verdictBandClass(outcome: ChangeSummary['outcome']) {
-		if (outcome === 'a') return 'border-chart-2/50 bg-chart-2/10';
-		if (outcome === 'b') return 'border-chart-4/50 bg-chart-4/10';
-		return 'border-border/80 bg-muted/35';
+		if (outcome === 'a') return 'verdict-band border-chart-2/50 bg-chart-2/10';
+		if (outcome === 'b') return 'verdict-band border-chart-4/50 bg-chart-4/10';
+		return 'verdict-band border-border/80 bg-muted/35';
 	}
 
 	function verdictBadgeClass(outcome: ChangeSummary['outcome']) {
@@ -713,15 +729,25 @@
 	/>
 </svelte:head>
 
-<main class="min-h-dvh bg-background text-foreground">
-	<header class="sticky top-0 z-30 border-b border-border/80 bg-background/92 backdrop-blur">
-		<div class="mx-auto flex max-w-[1760px] flex-col gap-3 px-4 py-3 lg:px-6">
+<main class="adventure-shell min-h-dvh text-foreground">
+	<ClassArtRail
+		art={selectedClassArt}
+		selectedPreset={selectedClassPreset}
+		customized={classPresetCustomized}
+		announcement={classPresetStatus}
+		onChoose={openClassPresetPicker}
+	/>
+
+	<div class="calculator-stage min-w-0">
+	<header class="fantasy-header sticky top-0 z-30 border-b">
+		<div class="mx-auto flex max-w-[1760px] flex-col gap-3 px-4 py-3 lg:px-6 lg:py-3.5">
 			<div class="flex flex-wrap items-center justify-between gap-3">
 				<div class="flex min-w-0 items-center gap-3">
-					<img src={favicon} alt="" class="size-10 shrink-0 rounded-md object-contain shadow-sm" />
+					<img src={favicon} alt="" class="brand-emblem size-11 shrink-0 rounded-xl object-contain" />
 					<div class="min-w-0">
-						<h1 class="truncate text-lg font-semibold">LaTale Damage Calculator</h1>
-						<div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+						<div class="brand-kicker">Adventurer's field guide</div>
+						<h1 class="brand-title mt-1 truncate text-lg sm:text-xl">LaTale Damage Calculator</h1>
+						<div class="brand-meta mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
 							<span>{TARGETS[report.settings.target].label}</span>
 							<span>Boss {formatPercent(report.settings.bossWeight)}</span>
 							<span>Buffs {activeBuffCount}</span>
@@ -730,17 +756,17 @@
 				</div>
 
 				<Tooltip.Provider delayDuration={120}>
-					<div class="flex flex-wrap items-center justify-end gap-2">
-						<Badge variant="secondary">
+					<div class="header-actions flex flex-wrap items-center justify-end gap-2">
+						<Badge variant="secondary" class="status-chip status-chip-base">
 							<TargetIcon data-icon="inline-start" />
 							{report.formatted.base.avg}
 						</Badge>
-						<Badge>
+						<Badge class="status-chip status-chip-gain">
 							<SparklesIcon data-icon="inline-start" />
 							{formatDisplayIncrease(report.raw.buffIncrease.avg)}
 						</Badge>
 						{#if showStickyVerdict && changeSummary}
-							<Badge variant="outline" class={verdictBadgeClass(changeSummary.outcome)}>
+							<Badge variant="outline" class={`status-chip ${verdictBadgeClass(changeSummary.outcome)}`}>
 								{changeSummary.stickyLabel}
 							</Badge>
 						{/if}
@@ -810,9 +836,9 @@
 		</div>
 	</header>
 
-	<section class="mx-auto grid max-w-[1760px] min-w-0 gap-4 px-4 py-4 lg:px-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-		<section class="min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
-			<div class="flex flex-wrap items-center justify-between gap-3 border-b border-border/80 px-4 py-3">
+	<section class="workspace-grid mx-auto grid max-w-[1760px] min-w-0 gap-4 px-4 py-5 lg:px-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
+		<section class="game-panel workbench-panel min-w-0 overflow-hidden border">
+			<div class="game-panel-header flex flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5">
 				<div class="flex min-w-0 flex-wrap items-center gap-2">
 					<BarChart3Icon class="size-4 text-primary" />
 					<h2 class="text-sm font-semibold">Stat Workbench</h2>
@@ -939,7 +965,7 @@
 				</div>
 			{/if}
 
-			<div class="md:hidden">
+			<div class="workbench-table workbench-mobile md:hidden">
 				<Tabs.Tabs bind:value={mobileStatsTab}>
 					<Tabs.List class="m-3 grid w-[calc(100%-1.5rem)] grid-cols-3">
 						<Tabs.Trigger value="base">Base</Tabs.Trigger>
@@ -958,10 +984,10 @@
 				</Tabs.Tabs>
 			</div>
 
-			<div class="hidden overflow-x-auto md:block">
-				<div class="min-w-[940px]">
+			<div class="workbench-table workbench-desktop hidden overflow-x-auto md:block">
+				<div class="min-w-[720px]">
 					<div
-						class="grid grid-cols-[11rem_repeat(4,minmax(5.25rem,1fr))_minmax(8.75rem,0.85fr)_repeat(2,minmax(5.25rem,1fr))] border-b border-border bg-muted/60 text-xs font-medium text-muted-foreground"
+						class="grid grid-cols-[8.5rem_repeat(4,minmax(4.5rem,1fr))_minmax(7rem,0.85fr)_repeat(2,minmax(4.5rem,1fr))] border-b border-border bg-muted/60 text-xs font-medium text-muted-foreground"
 					>
 						<div class="sticky left-0 z-20 row-span-2 flex items-center border-r border-border/70 bg-muted px-3 py-2">
 							Stat
@@ -983,7 +1009,7 @@
 					</div>
 
 					{#each STAT_GROUPS as group (group.label)}
-						<div class="grid grid-cols-[11rem_repeat(4,minmax(5.25rem,1fr))_minmax(8.75rem,0.85fr)_repeat(2,minmax(5.25rem,1fr))]">
+						<div class="grid grid-cols-[8.5rem_repeat(4,minmax(4.5rem,1fr))_minmax(7rem,0.85fr)_repeat(2,minmax(4.5rem,1fr))]">
 							<div class="col-span-8 border-b border-border/80 bg-muted/35 px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
 								{group.label}
 							</div>
@@ -1024,9 +1050,9 @@
 			</div>
 		</section>
 
-		<aside class="grid min-w-0 gap-4">
-			<section class="min-w-0 rounded-lg border border-border bg-card shadow-sm">
-				<div class="flex items-center justify-between gap-2 border-b border-border/80 px-4 py-3">
+		<aside class="grid min-w-0 gap-4 xl:self-start">
+			<section class="game-panel result-panel min-w-0 border">
+				<div class="game-panel-header flex items-center justify-between gap-2 border-b px-4 py-2.5">
 					<div class="flex items-center gap-2">
 						<GaugeIcon class="size-4 text-primary" />
 						<h2 class="text-sm font-semibold">Outcome</h2>
@@ -1053,8 +1079,8 @@
 					</div>
 				{/if}
 				<Tooltip.Provider delayDuration={120}>
-					<div class="space-y-4 p-4">
-						<div class="grid grid-cols-2 gap-x-4 gap-y-3">
+					<div class="result-body flex flex-col gap-4 p-4">
+						<div class="result-grid grid grid-cols-2">
 							{@render valueBlock('Normal', report.formatted.base.normal)}
 							{@render valueBlock('Boss', report.formatted.base.boss)}
 							{@render valueBlock('Buffed Normal', report.formatted.buffed.normal)}
@@ -1143,8 +1169,8 @@
 				</Tooltip.Provider>
 			</section>
 
-			<section id="parameters" class="min-w-0 rounded-lg border border-border bg-card shadow-sm">
-				<div class="flex items-center gap-2 border-b border-border/80 px-4 py-3">
+			<section id="parameters" class="game-panel settings-panel min-w-0 border">
+				<div class="game-panel-header flex items-center gap-2 border-b px-4 py-2.5">
 					<SlidersHorizontalIcon class="size-4 text-primary" />
 					<h2 class="text-sm font-semibold">Parameters</h2>
 				</div>
@@ -1163,7 +1189,10 @@
 										aria-expanded={classPresetOpen}
 										class="w-full justify-between px-3 font-normal"
 									>
-										<span class="truncate">{activeClassPreset ?? 'Custom'}</span>
+										<span class="truncate">{selectedClassPreset ?? 'Custom'}</span>
+										{#if classPresetCustomized}
+											<Badge variant="secondary" class="class-preset-tuned">Tuned</Badge>
+										{/if}
 										<ChevronsUpDownIcon class="ml-2 size-4 shrink-0 text-muted-foreground" />
 									</Button>
 								{/snippet}
@@ -1177,16 +1206,17 @@
 									<Command.Input placeholder="Search class presets..." />
 									<Command.List class="max-h-64">
 										<Command.Empty>No class found.</Command.Empty>
-										<Command.Group>
+										<Command.Group heading="Available classes">
 											{#each Object.keys(CLASS_PRESETS) as preset (preset)}
 												<Command.Item
 													value={preset}
 													class="[&_.cn-command-item-indicator]:hidden"
+													data-selected-class={selectedClassPreset === preset ? '' : undefined}
 													onSelect={() => selectClassPreset(preset)}
 												>
 													<span class="min-w-0 flex-1 truncate">{preset}</span>
 													<CheckIcon
-														class={`ml-auto size-4 shrink-0 ${activeClassPreset === preset ? 'opacity-100' : 'opacity-0'}`}
+														class={`ml-auto size-4 shrink-0 ${selectedClassPreset === preset ? 'opacity-100' : 'opacity-0'}`}
 													/>
 												</Command.Item>
 											{/each}
@@ -1244,9 +1274,9 @@
 		</aside>
 	</section>
 
-	<section class="mx-auto grid max-w-[1760px] min-w-0 gap-4 px-4 pb-6 lg:px-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-		<section id="equivalence" class="min-w-0 rounded-lg border border-border bg-card shadow-sm">
-			<div class="flex flex-wrap items-center justify-between gap-3 border-b border-border/80 px-4 py-3">
+	<section class="workspace-grid mx-auto grid max-w-[1760px] min-w-0 gap-4 px-4 pb-8 lg:px-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
+		<section id="equivalence" class="game-panel equivalence-panel min-w-0 border">
+			<div class="game-panel-header flex flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5">
 				<div class="flex items-center gap-2">
 					<ScaleIcon class="size-4 text-primary" />
 					<h2 class="text-sm font-semibold">Equivalence</h2>
@@ -1262,8 +1292,8 @@
 		</section>
 
 		<div class="grid min-w-0 gap-4">
-			<section class="min-w-0 rounded-lg border border-border bg-card shadow-sm">
-				<div class="flex items-center justify-between gap-2 border-b border-border/80 px-4 py-3">
+			<section class="game-panel ledger-panel min-w-0 border">
+				<div class="game-panel-header flex items-center justify-between gap-2 border-b px-4 py-2.5">
 					<div class="flex items-center gap-2">
 						<ListChecksIcon class="size-4 text-primary" />
 						<h2 class="text-sm font-semibold">Buff Ledger</h2>
@@ -1307,11 +1337,12 @@
 			</section>
 		</div>
 	</section>
+	</div>
 </main>
 
 <Sheet.Root bind:open={buffsOpen}>
 	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,54rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
-		<Sheet.Header class="border-b border-border/80 px-5 py-4">
+		<Sheet.Header class="fantasy-sheet-header border-b border-border/80 px-5 py-4">
 			<Sheet.Title>Buffs</Sheet.Title>
 		</Sheet.Header>
 
@@ -1390,7 +1421,7 @@
 
 <Sheet.Root bind:open={equivalenceOpen}>
 	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,44rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
-		<Sheet.Header class="border-b border-border/80 px-5 py-4">
+		<Sheet.Header class="fantasy-sheet-header border-b border-border/80 px-5 py-4">
 			<Sheet.Title>Equivalence</Sheet.Title>
 		</Sheet.Header>
 		<div class="p-5">
@@ -1401,7 +1432,7 @@
 
 <Sheet.Root bind:open={auditOpen}>
 	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,34rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
-		<Sheet.Header class="border-b border-border/80 px-5 py-4">
+		<Sheet.Header class="fantasy-sheet-header border-b border-border/80 px-5 py-4">
 			<Sheet.Title>Audit Details</Sheet.Title>
 		</Sheet.Header>
 
@@ -1459,7 +1490,7 @@
 
 <Sheet.Root bind:open={transferOpen}>
 	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,36rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
-		<Sheet.Header class="border-b border-border/80 px-5 py-4">
+		<Sheet.Header class="fantasy-sheet-header border-b border-border/80 px-5 py-4">
 			<Sheet.Title>Import / Export</Sheet.Title>
 		</Sheet.Header>
 
@@ -1606,9 +1637,9 @@
 {/snippet}
 
 {#snippet valueBlock(label: string, value: string)}
-	<div class="min-w-0">
-		<div class="text-xs text-muted-foreground">{label}</div>
-		<div class="mt-1 truncate text-base font-semibold tabular-nums">{value}</div>
+	<div class="stat-gem min-w-0">
+		<div class="stat-gem-label text-muted-foreground">{label}</div>
+		<div class="stat-gem-value mt-1.5 truncate text-base tabular-nums">{value}</div>
 	</div>
 {/snippet}
 
@@ -1706,7 +1737,7 @@
 	valueHeading: string,
 	percentHeading: string
 )}
-	<div class="overflow-hidden rounded-lg border border-border">
+	<div class="rune-table overflow-hidden border">
 		<Table.Table>
 			<Table.TableHeader>
 				<Table.TableRow>

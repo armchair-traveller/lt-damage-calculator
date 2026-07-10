@@ -69,6 +69,7 @@ export type CalculatorState = {
 	statsB: UiStats;
 	settings: Settings;
 	selectedBuffs: SelectedBuffs;
+	selectedClassPreset: string | null;
 };
 
 export const STORAGE_KEY = 'ltdc:state:v2';
@@ -247,20 +248,28 @@ export function createDefaultState(): CalculatorState {
 		statsA: makeUiStats(defaultStatsA, true),
 		statsB: makeUiStats(defaultStatsB, true),
 		settings: normalizeSettings(defaultSettings),
-		selectedBuffs: normalizeSelectedBuffs(defaultSelectedBuffs)
+		selectedBuffs: normalizeSelectedBuffs(defaultSelectedBuffs),
+		selectedClassPreset: null
 	};
 }
 
 export function normalizeState(source: unknown): CalculatorState {
 	const fallback = createDefaultState();
 	const input = (source ?? {}) as Partial<CalculatorState>;
+	const settings = normalizeSettings(input.settings ?? fallback.settings);
 	return {
 		stats: makeUiStats(input.stats ?? fallback.stats),
 		statsA: makeUiStats(input.statsA ?? fallback.statsA, true),
 		statsB: makeUiStats(input.statsB ?? fallback.statsB, true),
-		settings: normalizeSettings(input.settings ?? fallback.settings),
-		selectedBuffs: normalizeSelectedBuffs(input.selectedBuffs ?? fallback.selectedBuffs)
+		settings,
+		selectedBuffs: normalizeSelectedBuffs(input.selectedBuffs ?? fallback.selectedBuffs),
+		selectedClassPreset: normalizeClassPreset(input.selectedClassPreset, settings)
 	};
+}
+
+function normalizeClassPreset(value: unknown, settings: Settings): string | null {
+	if (typeof value === 'string' && value in CLASS_PRESETS) return value;
+	return matchClassPreset(settings) ?? null;
 }
 
 export function parseStoredState(text: string): CalculatorState {

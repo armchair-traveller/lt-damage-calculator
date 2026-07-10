@@ -369,7 +369,7 @@
 
 <Sheet.Root bind:open>
 	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,40rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
-		<Sheet.Header class="border-b border-border/80 px-5 py-4">
+		<Sheet.Header class="fantasy-sheet-header border-b border-border/80 px-5 py-4">
 			<Sheet.Title>Import Screenshot</Sheet.Title>
 		</Sheet.Header>
 
@@ -392,7 +392,7 @@
 				tabindex={status === 'loading' ? -1 : 0}
 				aria-controls="screenshot-import-file"
 				aria-disabled={status === 'loading'}
-				class={`relative grid min-h-52 overflow-hidden rounded-md border border-dashed transition ${zoneClass()}`}
+				class={`relative grid min-h-52 overflow-hidden rounded-xl border border-dashed transition ${zoneClass()}`}
 				onclick={openFilePicker}
 				onkeydown={handleImportZoneKeydown}
 				ondragenter={handleDragEnter}

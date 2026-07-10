@@ -5,6 +5,7 @@ import {
 	calculateEquivalenceTables,
 	createDefaultState,
 	matchClassPreset,
+	normalizeState,
 	parseStoredState,
 	serializeState
 } from './model.js';
@@ -40,7 +41,17 @@ describe('LaTale damage model regression', () => {
 	it('round-trips the normalized calculator state', () => {
 		expect.assertions(1);
 		const state = createDefaultState();
+		state.selectedClassPreset = 'Dokkaebi';
 		expect(parseStoredState(serializeState(state))).toEqual(state);
+	});
+
+	it('infers a selected class when loading an older exact-match state', () => {
+		expect.assertions(1);
+		const state = createDefaultState();
+		state.settings = applyClassPreset(state.settings, 'Windia');
+		const legacyState = { ...state, selectedClassPreset: undefined };
+
+		expect(normalizeState(legacyState).selectedClassPreset).toBe('Windia');
 	});
 
 	it('derives the matching class preset from active class factors', () => {
