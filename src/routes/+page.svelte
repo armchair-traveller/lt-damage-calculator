@@ -340,12 +340,6 @@
 		classPresetTrigger?.focus();
 	}
 
-	async function openClassPresetPicker() {
-		document.getElementById('class-preset')?.scrollIntoView({ block: 'center' });
-		await tick();
-		classPresetOpen = true;
-	}
-
 	function updateSlider(key: 'summonWeight' | 'backWeight' | 'minWeight' | 'bossWeight', value: number) {
 		calculator.settings[key] = value;
 	}
@@ -733,9 +727,7 @@
 	<ClassArtRail
 		art={selectedClassArt}
 		selectedPreset={selectedClassPreset}
-		customized={classPresetCustomized}
 		announcement={classPresetStatus}
-		onChoose={openClassPresetPicker}
 	/>
 
 	<div class="calculator-stage min-w-0">
