@@ -29,6 +29,10 @@
 	--chart-3: #0875f5;
 	--chart-4: #f04491;
 	--chart-5: #27b894;
+	--positive: #0b6b53;
+	--negative: #b4234f;
+	--comparison-a-foreground: #6b4300;
+	--comparison-b-foreground: #8a2358;
 	--radius: 0.82rem;
 	--sidebar: #fffdf7;
 	--sidebar-foreground: #24324a;
@@ -43,7 +47,7 @@
 	--paper-mint: #c8f2e7;
 	--paper-pink: #ffd8e8;
 	--paper-yellow: #ffedaa;
-	--live-blue: #0875f5;
+	--live-blue: #0662cf;
 }
 
 .dark {
@@ -70,6 +74,10 @@
 	--chart-3: #65aaff;
 	--chart-4: #ff78b5;
 	--chart-5: #55d7b4;
+	--positive: #7ee8c4;
+	--negative: #ff9bab;
+	--comparison-a-foreground: #ffe6a3;
+	--comparison-b-foreground: #fff0f7;
 	--sidebar: #18243d;
 	--sidebar-foreground: #f5f0df;
 	--sidebar-primary: #ff72ad;
@@ -97,6 +105,10 @@
 	--color-chart-3: var(--chart-3);
 	--color-chart-2: var(--chart-2);
 	--color-chart-1: var(--chart-1);
+	--color-positive: var(--positive);
+	--color-negative: var(--negative);
+	--color-comparison-a-foreground: var(--comparison-a-foreground);
+	--color-comparison-b-foreground: var(--comparison-b-foreground);
 	--color-ring: var(--ring);
 	--color-input: var(--input);
 	--color-border: var(--border);
@@ -574,10 +586,14 @@
 .result-panel {
 	--foreground: #fffdf7;
 	--card-foreground: #fffdf7;
-	--muted-foreground: #dceaff;
+	--muted-foreground: #edf5ff;
 	--border: #24324a;
 	--muted: rgb(255 255 255 / 16%);
 	--primary: #2ed5ae;
+	--positive: #eafff7;
+	--negative: #ffeef2;
+	--comparison-a-foreground: #ffe6a3;
+	--comparison-b-foreground: #fff0f7;
 	background: var(--live-blue);
 	color: var(--foreground);
 }
@@ -589,7 +605,7 @@
 }
 
 .result-panel > .game-panel-header h2::before {
-	color: #b9dafd;
+	color: var(--muted-foreground);
 	content: 'Live calculation';
 }
 
@@ -600,6 +616,10 @@
 }
 
 .result-panel .verdict-band {
+	--positive: #0b6b53;
+	--negative: #b4234f;
+	--comparison-a-foreground: #6b4300;
+	--comparison-b-foreground: #8a2358;
 	border-color: #24324a;
 	background: #ffd632;
 	color: #24324a;

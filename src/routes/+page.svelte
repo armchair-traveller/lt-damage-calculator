@@ -404,9 +404,9 @@
 		const numericValue = tone === 'neutral' ? Number.NaN : Number((value ?? '').replace(/[^0-9.-]/g, ''));
 		if (Number.isFinite(numericValue) && numericValue === 0) return 'text-muted-foreground';
 		return tone === 'positive'
-			? 'text-emerald-700 dark:text-emerald-300'
+			? 'text-positive'
 			: tone === 'negative'
-				? 'text-rose-700 dark:text-rose-300'
+				? 'text-negative'
 				: 'text-muted-foreground';
 	}
 
@@ -585,8 +585,8 @@
 	function inputToneClass(panelId: WorkbenchPanelId, state: WorkbenchInputState) {
 		if (state.invalid) return 'text-destructive';
 		if (!state.filled) return 'text-muted-foreground/75';
-		if (panelId === 'a') return 'text-chart-2';
-		if (panelId === 'b') return 'text-chart-4';
+		if (panelId === 'a') return 'text-comparison-a-foreground';
+		if (panelId === 'b') return 'text-comparison-b-foreground';
 		return 'text-foreground';
 	}
 
@@ -628,7 +628,7 @@
 	}
 
 	function metricCellClass(side: ComparisonSide, isWinner: boolean) {
-		if (!isWinner) return 'border-border/70 bg-background/55';
+		if (!isWinner) return 'border-border/70 bg-muted/35';
 		return side === 'a'
 			? 'border-chart-2/60 bg-chart-2/10'
 			: 'border-chart-4/60 bg-chart-4/10';
@@ -647,14 +647,14 @@
 	}
 
 	function verdictLabelClass(outcome: ChangeSummary['outcome']) {
-		if (outcome === 'a') return 'text-chart-2';
-		if (outcome === 'b') return 'text-chart-4';
+		if (outcome === 'a') return 'text-comparison-a-foreground';
+		if (outcome === 'b') return 'text-comparison-b-foreground';
 		return 'text-foreground';
 	}
 
 	function deltaToneClass(value: number) {
 		if (!Number.isFinite(value) || isDisplayedTie(value)) return 'text-muted-foreground';
-		return value > 0 ? 'text-chart-2' : 'text-chart-4';
+		return value > 0 ? 'text-comparison-a-foreground' : 'text-comparison-b-foreground';
 	}
 
 	function deltaBarClass(value: number) {
@@ -881,7 +881,7 @@
 										onclick={() => copyPanelToPanel('a', 'b')}
 									>
 										<CopyIcon />
-										<span class="absolute -right-1 -top-1 grid size-4 place-items-center rounded-sm border border-chart-4/50 bg-card text-[9px] font-semibold text-chart-4">
+										<span class="absolute -right-1 -top-1 grid size-4 place-items-center rounded-sm border border-chart-4/50 bg-card text-[9px] font-semibold text-comparison-b-foreground">
 											B
 										</span>
 									</Button>
@@ -917,7 +917,7 @@
 						>
 							<EraserIcon data-icon="inline-start" />
 							<span class="max-sm:sr-only">Clear A</span>
-							<span class="absolute -right-1 -top-1 hidden size-4 place-items-center rounded-sm border border-chart-2/50 bg-card text-[9px] font-semibold text-chart-2 max-sm:grid">
+							<span class="absolute -right-1 -top-1 hidden size-4 place-items-center rounded-sm border border-chart-2/50 bg-card text-[9px] font-semibold text-comparison-a-foreground max-sm:grid">
 								A
 							</span>
 						</Button>
@@ -931,7 +931,7 @@
 						>
 							<EraserIcon data-icon="inline-start" />
 							<span class="max-sm:sr-only">Clear B</span>
-							<span class="absolute -right-1 -top-1 hidden size-4 place-items-center rounded-sm border border-chart-4/50 bg-card text-[9px] font-semibold text-chart-4 max-sm:grid">
+							<span class="absolute -right-1 -top-1 hidden size-4 place-items-center rounded-sm border border-chart-4/50 bg-card text-[9px] font-semibold text-comparison-b-foreground max-sm:grid">
 								B
 							</span>
 						</Button>
@@ -951,13 +951,13 @@
 						</div>
 					</div>
 					<div class="min-w-0 border-l border-chart-2/50 pl-3">
-						<div class="text-[10px] font-semibold text-chart-2">A weighted gain</div>
+						<div class="text-[10px] font-semibold text-comparison-a-foreground">A weighted gain</div>
 						<div class={`${activeTone(formatDisplayIncrease(report.raw.buffedIncreaseA.avg))} mt-0.5 truncate text-xs`}>
 							{formatDisplayIncrease(report.raw.buffedIncreaseA.avg)}
 						</div>
 					</div>
 					<div class="min-w-0 border-l border-chart-4/50 pl-3">
-						<div class="text-[10px] font-semibold text-chart-4">B weighted gain</div>
+						<div class="text-[10px] font-semibold text-comparison-b-foreground">B weighted gain</div>
 						<div class={`${activeTone(formatDisplayIncrease(report.raw.buffedIncreaseB.avg))} mt-0.5 truncate text-xs`}>
 							{formatDisplayIncrease(report.raw.buffedIncreaseB.avg)}
 						</div>
@@ -993,13 +993,13 @@
 							Stat
 						</div>
 						<div class="col-span-2 border-r border-border/70 px-2 py-1.5 text-center">Base</div>
-						<div class="col-span-2 border-r border-chart-2/40 bg-chart-2/10 px-2 py-1.5 text-center text-chart-2">
+						<div class="col-span-2 border-r border-chart-2/40 bg-chart-2/10 px-2 py-1.5 text-center text-comparison-a-foreground">
 							Change A
 						</div>
 						<div class="row-span-2 flex items-center justify-center border-r border-border/70 px-2 py-2 text-center">
 							Impact
 						</div>
-						<div class="col-span-2 bg-chart-4/10 px-2 py-1.5 text-center text-chart-4">Change B</div>
+						<div class="col-span-2 bg-chart-4/10 px-2 py-1.5 text-center text-comparison-b-foreground">Change B</div>
 						<div class="border-r border-border/70 px-2 py-1.5 text-right">Flat</div>
 						<div class="border-r border-border/70 px-2 py-1.5 text-right">%</div>
 						<div class="border-r border-chart-2/40 px-2 py-1.5 text-right">Flat</div>
