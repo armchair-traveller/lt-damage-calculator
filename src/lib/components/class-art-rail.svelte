@@ -28,7 +28,7 @@
 
 <aside class="class-art-rail" aria-labelledby="selected-class-title">
 	<div class="class-art-copy">
-		<p class="class-art-kicker">Class preset · character art</p>
+		<p class="class-art-kicker">Class preset</p>
 		<h2 id="selected-class-title">
 			Pick a class
 			<span>for the build.</span>
