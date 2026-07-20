@@ -31,6 +31,12 @@ export type ScreenshotExtractionFields = {
 	magicalMinimumDamage: string | null;
 	physicalMaximumDamage: string | null;
 	magicalMaximumDamage: string | null;
+	physicalCriticalDamageBonusRow: string | null;
+	magicalCriticalDamageBonusRow: string | null;
+	physicalMinimumDamageBonusRow: string | null;
+	magicalMinimumDamageBonusRow: string | null;
+	physicalMaximumDamageBonusRow: string | null;
+	magicalMaximumDamageBonusRow: string | null;
 	physicalStaticDamage: string | null;
 	magicalStaticDamage: string | null;
 	physicalStaticDamageBonusRow: string | null;
@@ -90,6 +96,12 @@ export const SCREENSHOT_EXTRACTION_FIELD_KEYS = [
 	'magicalMinimumDamage',
 	'physicalMaximumDamage',
 	'magicalMaximumDamage',
+	'physicalCriticalDamageBonusRow',
+	'magicalCriticalDamageBonusRow',
+	'physicalMinimumDamageBonusRow',
+	'magicalMinimumDamageBonusRow',
+	'physicalMaximumDamageBonusRow',
+	'magicalMaximumDamageBonusRow',
 	'physicalStaticDamage',
 	'magicalStaticDamage',
 	'physicalStaticDamageBonusRow',
@@ -147,7 +159,7 @@ export function mapScreenshotExtraction(extraction: ScreenshotExtraction): Scree
 	const stats = variants[variant];
 	const warnings = [
 		...(Array.isArray(extraction.warnings) ? extraction.warnings : []),
-		...staticDamagePercentWarnings(fields)
+		...damagePercentWarnings(fields)
 	];
 
 	return {
@@ -187,19 +199,28 @@ function mapScreenshotVariant(
 		stats,
 		'critical',
 		focus(fields.physicalCriticalDamage, fields.magicalCriticalDamage),
-		focus(fields.physicalCriticalDamagePercent, fields.magicalCriticalDamagePercent)
+		focus(
+			damagePercent(fields.physicalCriticalDamageBonusRow, fields.physicalCriticalDamagePercent),
+			damagePercent(fields.magicalCriticalDamageBonusRow, fields.magicalCriticalDamagePercent)
+		)
 	);
 	setStat(
 		stats,
 		'minimum',
 		focus(fields.physicalMinimumDamage, fields.magicalMinimumDamage),
-		focus(fields.physicalMinimumDamagePercent, fields.magicalMinimumDamagePercent)
+		focus(
+			damagePercent(fields.physicalMinimumDamageBonusRow, fields.physicalMinimumDamagePercent),
+			damagePercent(fields.magicalMinimumDamageBonusRow, fields.magicalMinimumDamagePercent)
+		)
 	);
 	setStat(
 		stats,
 		'maximum',
 		focus(fields.physicalMaximumDamage, fields.magicalMaximumDamage),
-		focus(fields.physicalMaximumDamagePercent, fields.magicalMaximumDamagePercent)
+		focus(
+			damagePercent(fields.physicalMaximumDamageBonusRow, fields.physicalMaximumDamagePercent),
+			damagePercent(fields.magicalMaximumDamageBonusRow, fields.magicalMaximumDamagePercent)
+		)
 	);
 	setStat(
 		stats,
@@ -312,29 +333,63 @@ function majorityVariant(votes: ScreenshotVariant[]) {
 }
 
 function staticDamagePercent(rowText: unknown, percent: unknown) {
-	return rowPercent(rowText, percent);
+	return damagePercent(rowText, percent);
 }
 
-function staticDamagePercentWarnings(fields: ScreenshotExtractionFields) {
+function damagePercent(rowText: unknown, percent: unknown) {
+	return normalizeExplicitPercent(rowText) || normalizeReasonablePercent(percent);
+}
+
+function damagePercentWarnings(fields: ScreenshotExtractionFields) {
 	return [
-		staticDamagePercentWarning(
-			'Physical',
+		rowPercentWarning(
+			'Physical Critical Damage',
+			fields.physicalCriticalDamageBonusRow,
+			fields.physicalCriticalDamagePercent
+		),
+		rowPercentWarning(
+			'Magical Critical Damage',
+			fields.magicalCriticalDamageBonusRow,
+			fields.magicalCriticalDamagePercent
+		),
+		rowPercentWarning(
+			'Physical Minimum Damage',
+			fields.physicalMinimumDamageBonusRow,
+			fields.physicalMinimumDamagePercent
+		),
+		rowPercentWarning(
+			'Magical Minimum Damage',
+			fields.magicalMinimumDamageBonusRow,
+			fields.magicalMinimumDamagePercent
+		),
+		rowPercentWarning(
+			'Physical Maximum Damage',
+			fields.physicalMaximumDamageBonusRow,
+			fields.physicalMaximumDamagePercent
+		),
+		rowPercentWarning(
+			'Magical Maximum Damage',
+			fields.magicalMaximumDamageBonusRow,
+			fields.magicalMaximumDamagePercent
+		),
+		rowPercentWarning(
+			'Physical Static Damage',
 			fields.physicalStaticDamageBonusRow,
 			fields.physicalStaticDamagePercent
 		),
-		staticDamagePercentWarning(
-			'Magical',
+		rowPercentWarning(
+			'Magical Static Damage',
 			fields.magicalStaticDamageBonusRow,
 			fields.magicalStaticDamagePercent
 		)
 	].filter((warning): warning is string => Boolean(warning));
 }
 
-function staticDamagePercentWarning(label: string, rowText: unknown, percent: unknown) {
-	const rowPercentValue = normalizeReasonablePercent(rowText);
+function rowPercentWarning(label: string, rowText: unknown, percent: unknown) {
+	const rowPercentValue = normalizeExplicitPercent(rowText);
 	const separatePercentValue = normalizeReasonablePercent(percent);
 	if (!rowPercentValue || !separatePercentValue || rowPercentValue === separatePercentValue) return '';
-	return `${label} Static Damage percent used ${rowPercentValue}% from the bonus row instead of ${separatePercentValue}% from the separate field.`;
+	return `${label} percent used ${rowPercentValue}% from the bonus row instead of ${separatePercentValue}% from the separate field.`;
 }
 
 function attackPercent(rowText: unknown, percent: unknown) {
@@ -349,13 +404,19 @@ function normalizeReasonablePercent(value: unknown) {
 	if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
 	if (typeof value !== 'string') return '';
 
-	const percentMatches = value.match(/[+-]?\s*\d[\d,]*(?:\.\d+)?\s*%/g);
-	const explicitPercent = normalizePercentToken(percentMatches?.[percentMatches.length - 1]);
+	const explicitPercent = normalizeExplicitPercent(value);
 	if (isReasonablePercent(explicitPercent)) return explicitPercent;
 
 	const matches = value.match(/[+-]?\s*\d[\d,]*(?:\.\d+)?/g);
 	const candidate = normalizePercentToken(matches?.[matches.length - 1]);
 	return isReasonablePercent(candidate) ? candidate : '';
+}
+
+function normalizeExplicitPercent(value: unknown) {
+	if (typeof value !== 'string') return '';
+	const percentMatches = value.match(/[+-]?\s*\d[\d,]*(?:\.\d+)?\s*%/g);
+	const explicitPercent = normalizePercentToken(percentMatches?.[percentMatches.length - 1]);
+	return isReasonablePercent(explicitPercent) ? explicitPercent : '';
 }
 
 function normalizePercentToken(value: unknown) {

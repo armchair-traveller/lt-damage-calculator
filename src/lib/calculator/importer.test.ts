@@ -26,6 +26,12 @@ const baseFields = {
 	magicalMinimumDamage: '6,465',
 	physicalMaximumDamage: '7,060',
 	magicalMaximumDamage: '6,498',
+	physicalCriticalDamageBonusRow: 'Critical Damage +5,100 / 39%',
+	magicalCriticalDamageBonusRow: 'Critical Damage +4,900 / 34%',
+	physicalMinimumDamageBonusRow: 'Minimum Damage +4,200 / 38%',
+	magicalMinimumDamageBonusRow: 'Minimum Damage +4,100 / 38%',
+	physicalMaximumDamageBonusRow: 'Maximum Damage +4,400 / 33%',
+	magicalMaximumDamageBonusRow: 'Maximum Damage +4,300 / 28%',
 	physicalStaticDamage: '672,263',
 	magicalStaticDamage: '551,320',
 	physicalStaticDamageBonusRow: 'Static Damage +350,137 / 92%',
@@ -157,6 +163,58 @@ describe('screenshot importer mapping', () => {
 		expect(result.variants.physical.attack).toEqual(['45000', '370']);
 	});
 
+	it('keeps Minimum Damage percentages on their named row when adjacent Critical Damage is 40%', () => {
+		expect.assertions(4);
+		const result = mapScreenshotExtraction({
+			variant: 'magical',
+			fields: {
+				...magicalFields,
+				physicalCriticalDamage: '7,145',
+				magicalCriticalDamage: '7,659',
+				physicalMinimumDamage: '6,877',
+				magicalMinimumDamage: '6,923',
+				physicalCriticalDamageBonusRow: 'Critical Damage +5,293 / 35%',
+				magicalCriticalDamageBonusRow: 'Critical Damage +5,471 / 40%',
+				physicalMinimumDamageBonusRow: 'Minimum Damage +4,948 / 39%',
+				magicalMinimumDamageBonusRow: 'Minimum Damage +4,981 / 39%',
+				physicalCriticalDamagePercent: '35%',
+				magicalCriticalDamagePercent: '40%',
+				physicalMinimumDamagePercent: '39%',
+				magicalMinimumDamagePercent: '40%'
+			},
+			confidence: 0.89,
+			warnings: []
+		});
+		const merged = mergeImportedStats(createDefaultState().stats, result.variants.magical);
+
+		expect(result.variants.physical.minimum).toEqual(['6877', '39']);
+		expect(result.variants.magical.critical).toEqual(['7659', '40']);
+		expect(merged.minimum).toEqual(['6923', '39']);
+		expect(result.warnings).toEqual([
+			'Magical Minimum Damage percent used 39% from the bonus row instead of 40% from the separate field.'
+		]);
+	});
+
+	it('ignores incomplete damage bonus rows that do not contain an explicit percent', () => {
+		expect.assertions(3);
+		const result = mapScreenshotExtraction({
+			variant: 'physical',
+			fields: {
+				...baseFields,
+				physicalMinimumDamageBonusRow: 'Minimum Damage +948',
+				physicalMinimumDamagePercent: '39%',
+				physicalStaticDamageBonusRow: 'Static Damage +913',
+				physicalStaticDamagePercent: '92%'
+			},
+			confidence: 0.9,
+			warnings: []
+		});
+
+		expect(result.stats.minimum).toEqual(['6596', '39']);
+		expect(result.stats.static).toEqual(['672263', '92']);
+		expect(result.warnings).toEqual([]);
+	});
+
 	it('prefers full Static Damage row percentages for physical and magical columns', () => {
 		expect.assertions(4);
 		const result = mapScreenshotExtraction({
@@ -203,7 +261,12 @@ describe('screenshot importer mapping', () => {
 		expect.assertions(4);
 		const result = mapScreenshotExtraction({
 			variant: 'physical',
-			fields: { ...baseFields, str: null, physicalCriticalDamagePercent: null },
+			fields: {
+				...baseFields,
+				str: null,
+				physicalCriticalDamageBonusRow: null,
+				physicalCriticalDamagePercent: null
+			},
 			confidence: 0.5,
 			warnings: []
 		});

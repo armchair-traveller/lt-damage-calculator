@@ -22,6 +22,12 @@ const extraction: ScreenshotExtraction = {
 		magicalMinimumDamage: '6,465',
 		physicalMaximumDamage: '7,060',
 		magicalMaximumDamage: '6,498',
+		physicalCriticalDamageBonusRow: 'Critical Damage +5,100 / 39%',
+		magicalCriticalDamageBonusRow: 'Critical Damage +4,900 / 34%',
+		physicalMinimumDamageBonusRow: 'Minimum Damage +4,200 / 38%',
+		magicalMinimumDamageBonusRow: 'Minimum Damage +4,100 / 38%',
+		physicalMaximumDamageBonusRow: 'Maximum Damage +4,400 / 33%',
+		magicalMaximumDamageBonusRow: 'Maximum Damage +4,300 / 28%',
 		physicalStaticDamage: '672,263',
 		magicalStaticDamage: '551,320',
 		physicalStaticDamageBonusRow: 'Static Damage +350,137 / 92%',
@@ -58,7 +64,7 @@ const extraction: ScreenshotExtraction = {
 
 describe('screenshot stat import route', () => {
 	it('returns mapped stats from a mocked OpenAI response', async () => {
-		expect.assertions(17);
+		expect.assertions(21);
 		const uploadBytes = new Uint8Array([1, 2, 3, 4]);
 		const processedBytes = new Uint8Array([137, 80, 78, 71]);
 		const preprocessMock = vi.fn(async (bytes: Uint8Array) => {
@@ -70,17 +76,33 @@ describe('screenshot stat import route', () => {
 				model: string;
 				reasoning: { effort: string };
 				input: Array<{ content: Array<{ type: string; detail?: string; image_url?: string; text?: string }> }>;
-				text: { format: { schema: { required: string[]; properties: Record<string, unknown> } } };
+				text: {
+					format: {
+						schema: {
+							required: string[];
+							properties: {
+								fields: {
+									required: string[];
+									properties: Record<string, { description?: string }>;
+								};
+							};
+						};
+					};
+				};
 			};
 			const image = body.input[0].content.find((item) => item.type === 'input_image');
 			const prompt = body.input[0].content.find((item) => item.type === 'input_text');
-			expect(body.model).toBe('gpt-5.4-mini');
+			expect(body.model).toBe('gpt-5.6-sol');
 			expect(body.reasoning.effort).toBe('none');
-			expect(prompt?.text).toContain('Step order:');
-			expect(image?.detail).toBe('high');
+			expect(prompt?.text).toContain('Never reuse a flat or percent from the row above or below.');
+			expect(image?.detail).toBe('original');
 			expect(image?.image_url).toBe(`data:image/png;base64,${Buffer.from(processedBytes).toString('base64')}`);
 			expect(body.text.format.schema.required).not.toContain('variant');
 			expect(body.text.format.schema.properties).not.toHaveProperty('variant');
+			expect(body.text.format.schema.properties.fields.required).toContain('magicalMinimumDamageBonusRow');
+			expect(
+				body.text.format.schema.properties.fields.properties.magicalMinimumDamagePercent.description
+			).toContain('Never use Critical Damage');
 			return Response.json({ output_text: JSON.stringify(extraction) });
 		});
 
@@ -97,7 +119,9 @@ describe('screenshot stat import route', () => {
 		expect(body.variant).toBe('physical');
 		expect(body.stats.strength).toEqual(['4262437', '409']);
 		expect(body.stats.attack).toEqual(['55657', '370']);
+		expect(body.stats.minimum).toEqual(['6596', '38']);
 		expect(body.stats.static).toEqual(['672263', '92']);
+		expect(body.variants.magical.minimum).toEqual(['6465', '38']);
 		expect(body.variants.magical.static).toEqual(['551320', '64']);
 		expect(body.warnings).toEqual([]);
 	});

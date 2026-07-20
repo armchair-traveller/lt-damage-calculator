@@ -16,25 +16,28 @@ export const prerender = false;
 
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const MODEL = 'gpt-5.4-mini';
+const MODEL = 'gpt-5.6-sol';
+const IMAGE_DETAIL = 'original';
 const ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const SCREENSHOT_IMPORT_PROMPT = [
-	'Role: Extract LaTale status-window stats from one screenshot for a stat-import tool.',
-	'Critical rules:',
+	'Extract exact text from one LaTale status screenshot into the provided schema.',
+	'Transcription rules:',
 	'- Return only the final JSON object that matches the schema. After the final JSON, output nothing further.',
-	'- Do not ask a follow-up question, explain the extraction, or choose a physical or magical focus.',
-	'- Extract both physical and magical variants exactly as visible.',
+	'- Transcribe visible text only. Never calculate, infer, correct, normalize, or round a value.',
 	'- Use null for any value that is hidden, unreadable, absent, or not clearly tied to the requested field.',
-	'- Do not guess from nearby rows. Add a short warning for ambiguous, hidden, or low-confidence values.',
-	'- Keep numeric text exact; include commas or percent signs only if they appear. When a stat is shown as a range, use the higher or right-side value.',
-	'Step order:',
-	'1. Read the main status values: STR, INT, Attack, and Ele. Intensity. Keep STR separate from INT and Attack separate from Ele. Intensity.',
-	'2. Read both Physical and Magical columns separately wherever a table has both columns.',
-	'3. Read Additional Details rows for Strength, Intelligence, Attack, Ele. Intensity, Normal Add. DMG, and Boss Add. DMG.',
-	'4. Read the lower Physical/Magical table rows for Critical Damage, Minimum Damage, Maximum Damage, Static Damage, Strength/Magic, Back Attack Damage, Physical Power, and Magical Power.',
-	'5. Read the lower Detailed Stats Normal/Boss table rows for Added Damage and Damage Amplification.',
-	'6. Read Melee Damage and Status Damage if visible.',
-	'7. Before finalizing, verify every schema field was either filled from visible text or set to null.',
+	'- Preserve every visible digit, comma, decimal point, sign, slash, tilde, and percent sign. For a range, use its visible right-hand value where the schema requests one value.',
+	'- Right-hand value means the endpoint of an explicit ~ range inside one cell; it never means the Magical column.',
+	'- Keep Physical and Magical columns separate. Do not choose one focus or copy a value between columns.',
+	'Panel map:',
+	'1. Detailed Stats is the left panel. Read STR, INT, Attack, Ele. Intensity, the main Physical/Magical values, and the lower Normal/Boss values there.',
+	'2. Additional Details is the right panel. Read the power indicators, upper bonus rows, lower Physical/Magical bonus grid, Melee Damage, and Status Damage there.',
+	'Lower bonus-grid procedure:',
+	'- Process these named rows one at a time: Critical Damage, Minimum Damage, Maximum Damage, Static Damage, Strength/Magic.',
+	'- On each row, first confirm the row label, then read the complete Physical cell and the complete Magical cell before moving to another row.',
+	'- Critical Damage, Minimum Damage, Maximum Damage, and Static Damage are independent adjacent rows. Never reuse a flat or percent from the row above or below.',
+	'- For every Critical, Minimum, Maximum, or Static *BonusRow field, return the complete matching cell text, including the visible +flat / percent.',
+	'- For each matching damage *Percent field, return only the percent from that same row and column.',
+	'- Cross-check each Critical, Minimum, Maximum, and Static percent against its BonusRow cell. If they disagree, re-read the row; use null and add a warning if still unresolved.',
 	'Field rules:',
 	'- For strengthPercent, read the percent on the Strength row in Additional Details. For intelligencePercent, read the percent on the Intelligence row.',
 	'- For attackBonusRow, return the full Additional Details Attack row text, including the flat bonus or range and the percent or percent range if visible.',
@@ -45,15 +48,53 @@ const SCREENSHOT_IMPORT_PROMPT = [
 	'- For normalAddedFlat, bossAddedFlat, normalAmpFlat, and bossAmpFlat, do not use the Additional Details bonus rows; prefer the Detailed Stats Normal/Boss table values.',
 	'- For normalAddedPercent and bossAddedPercent, use the Additional Details Normal Add. DMG and Boss Add. DMG percent values.',
 	'- For statRatioPercent, read the lower Physical/Magical table row named Strength/Magic; do not use this value as strengthPercent or intelligencePercent.',
-	'- For physicalStaticDamagePercent and magicalStaticDamagePercent, read the percent on the Static Damage row in the lower Physical/Magical table, next to the Static Damage bonus flat value.',
-	'- For physicalStaticDamageBonusRow and magicalStaticDamageBonusRow, return the full lower-table Static Damage row text for each column, including the bonus flat value and slash percent.',
 	'- Do not use the Detailed Stats Def. Penetration value as any Static Damage percent.',
 	'- Extract both Physical Power and Magical Power indicator values even though they are not imported into base stats.',
-	'Output:',
-	'- fields: include every schema field.',
-	'- confidence: a number from 0 to 1 based on screenshot readability and extraction certainty.',
-	'- warnings: concise strings; use [] when there are no issues.'
+	'- Before returning, verify that every schema field is filled from its named cell or is null. Add concise warnings for unresolved or low-confidence cells; otherwise use [].'
 ].join('\n');
+
+const SCREENSHOT_FIELD_DESCRIPTIONS: Partial<
+	Record<(typeof SCREENSHOT_EXTRACTION_FIELD_KEYS)[number], string>
+> = {
+	physicalCriticalDamage: 'Detailed Stats left panel, Critical Damage row, Physical column main value.',
+	magicalCriticalDamage: 'Detailed Stats left panel, Critical Damage row, Magical column main value.',
+	physicalMinimumDamage: 'Detailed Stats left panel, Minimum Damage row, Physical column main value.',
+	magicalMinimumDamage: 'Detailed Stats left panel, Minimum Damage row, Magical column main value.',
+	physicalMaximumDamage: 'Detailed Stats left panel, Maximum Damage row, Physical column main value.',
+	magicalMaximumDamage: 'Detailed Stats left panel, Maximum Damage row, Magical column main value.',
+	physicalCriticalDamageBonusRow:
+		'Complete Physical cell on the Additional Details Critical Damage row, including +flat / percent. Do not use Minimum Damage.',
+	magicalCriticalDamageBonusRow:
+		'Complete Magical cell on the Additional Details Critical Damage row, including +flat / percent. Do not use Minimum Damage.',
+	physicalMinimumDamageBonusRow:
+		'Complete Physical cell on the Additional Details Minimum Damage row, including +flat / percent. Do not use Critical or Maximum Damage.',
+	magicalMinimumDamageBonusRow:
+		'Complete Magical cell on the Additional Details Minimum Damage row, including +flat / percent. Do not use Critical or Maximum Damage.',
+	physicalMaximumDamageBonusRow:
+		'Complete Physical cell on the Additional Details Maximum Damage row, including +flat / percent. Do not use Minimum Damage.',
+	magicalMaximumDamageBonusRow:
+		'Complete Magical cell on the Additional Details Maximum Damage row, including +flat / percent. Do not use Minimum Damage.',
+	physicalStaticDamageBonusRow:
+		'Complete Physical cell on the Additional Details Static Damage row, including +flat / percent.',
+	magicalStaticDamageBonusRow:
+		'Complete Magical cell on the Additional Details Static Damage row, including +flat / percent.',
+	physicalCriticalDamagePercent:
+		'Exact percent after the slash in the Additional Details Critical Damage row, Physical column. Do not round.',
+	magicalCriticalDamagePercent:
+		'Exact percent after the slash in the Additional Details Critical Damage row, Magical column. Do not round.',
+	physicalMinimumDamagePercent:
+		'Exact percent after the slash in the Additional Details Minimum Damage row, Physical column. Never use Critical Damage. Do not round.',
+	magicalMinimumDamagePercent:
+		'Exact percent after the slash in the Additional Details Minimum Damage row, Magical column. Never use Critical Damage. Do not round.',
+	physicalMaximumDamagePercent:
+		'Exact percent after the slash in the Additional Details Maximum Damage row, Physical column. Do not round.',
+	magicalMaximumDamagePercent:
+		'Exact percent after the slash in the Additional Details Maximum Damage row, Magical column. Do not round.',
+	physicalStaticDamagePercent:
+		'Exact percent after the slash in the Additional Details Static Damage row, Physical column. Do not use Def. Penetration.',
+	magicalStaticDamagePercent:
+		'Exact percent after the slash in the Additional Details Static Damage row, Magical column. Do not use Def. Penetration.'
+};
 
 type ImportHandlerOptions = {
 	apiKey?: string;
@@ -189,7 +230,7 @@ function buildOpenAIRequest(imageUrl: string) {
 					{
 						type: 'input_image',
 						image_url: imageUrl,
-						detail: 'high'
+						detail: IMAGE_DETAIL
 					}
 				]
 			}
@@ -207,12 +248,16 @@ function buildOpenAIRequest(imageUrl: string) {
 
 function extractionSchema() {
 	const fieldProperties = Object.fromEntries(
-		SCREENSHOT_EXTRACTION_FIELD_KEYS.map((key) => [
-			key,
-			{
-				type: ['string', 'null']
-			}
-		])
+		SCREENSHOT_EXTRACTION_FIELD_KEYS.map((key) => {
+			const description = SCREENSHOT_FIELD_DESCRIPTIONS[key];
+			return [
+				key,
+				{
+					type: ['string', 'null'],
+					...(description ? { description } : {})
+				}
+			];
+		})
 	);
 
 	return {
