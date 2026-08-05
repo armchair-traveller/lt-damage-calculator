@@ -1,8 +1,9 @@
 <svelte:options runes={true} />
 
 <script lang="ts">
+	import { afterNavigate, replaceState } from '$app/navigation';
 	import favicon from '$lib/assets/favicon.ico';
-	import { onMount, tick } from 'svelte';
+	import { tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { SvelteSet } from 'svelte/reactivity';
 	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
@@ -54,6 +55,14 @@
 		type WorkbenchImpactRow,
 		type WorkbenchPanelId
 	} from '$lib/calculator/workbench-impact.js';
+	import {
+		findFirstEmptyChangeTarget,
+		LT_GEAR_FRAGMENT_PARAM,
+		mergeGearComparisonCandidate,
+		parseGearComparisonFragment,
+		type ChangeTarget,
+		type GearComparisonCandidate
+	} from '$lib/calculator/gear-comparison-import.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
@@ -152,10 +161,12 @@
 	let auditOpen = $state(false);
 	let transferOpen = $state(false);
 	let screenshotImportOpen = $state(false);
+	let gearImportOpen = $state(false);
 	let transferText = $state('');
 	let transferStatus = $state('');
-	let screenshotImportApplyNotice = $state('');
-	let screenshotImportApplyNoticeTimeout: number | null = null;
+	let workbenchApplyNotice = $state('');
+	let workbenchApplyNoticeTimeout: number | null = null;
+	let pendingGearImports = $state<GearComparisonCandidate[]>([]);
 	let buffQuery = $state('');
 	let equivalenceTab = $state('damage');
 	let mobileStatsTab = $state('base');
@@ -233,15 +244,19 @@
 	const workbenchCellImpactScaleMax = $derived(comparisonDeltaScale(workbenchCellImpacts));
 	const hasAChanges = $derived(panelHasEnteredValues(calculator.statsA));
 	const hasBChanges = $derived(panelHasEnteredValues(calculator.statsB));
+	const pendingGearImport = $derived(pendingGearImports[0]);
 
-	onMount(() => {
-		const stored = window.localStorage.getItem(STORAGE_KEY);
-		if (stored) {
-			calculator = parseStoredState(stored);
-		} else {
-			const legacy = readLegacyState();
-			if (legacy) calculator = normalizeState(legacy);
+	afterNavigate(() => {
+		if (!hydrated) {
+			const stored = window.localStorage.getItem(STORAGE_KEY);
+			if (stored) {
+				calculator = parseStoredState(stored);
+			} else {
+				const legacy = readLegacyState();
+				if (legacy) calculator = normalizeState(legacy);
+			}
 		}
+		consumeGearComparisonFragment();
 		hydrated = true;
 	});
 
@@ -252,8 +267,8 @@
 
 	$effect(() => {
 		return () => {
-			if (screenshotImportApplyNoticeTimeout !== null) {
-				window.clearTimeout(screenshotImportApplyNoticeTimeout);
+			if (workbenchApplyNoticeTimeout !== null) {
+				window.clearTimeout(workbenchApplyNoticeTimeout);
 			}
 		};
 	});
@@ -327,7 +342,7 @@
 	function resetAll() {
 		calculator = createDefaultState();
 		transferStatus = 'Reset.';
-		clearScreenshotImportApplyNotice();
+		clearWorkbenchApplyNotice();
 		clearAllStatDrafts();
 	}
 
@@ -374,25 +389,86 @@
 	function applyScreenshotImportResult(nextStats: UiStats, notice: string) {
 		calculator.stats = nextStats;
 		clearDraftsForPanel('base');
-		showScreenshotImportApplyNotice(notice);
+		showWorkbenchApplyNotice(notice);
 	}
 
-	function showScreenshotImportApplyNotice(message: string) {
-		screenshotImportApplyNotice = message;
-		if (screenshotImportApplyNoticeTimeout !== null) {
-			window.clearTimeout(screenshotImportApplyNoticeTimeout);
+	function showWorkbenchApplyNotice(message: string) {
+		workbenchApplyNotice = message;
+		if (workbenchApplyNoticeTimeout !== null) {
+			window.clearTimeout(workbenchApplyNoticeTimeout);
 		}
-		screenshotImportApplyNoticeTimeout = window.setTimeout(() => {
-			screenshotImportApplyNotice = '';
-			screenshotImportApplyNoticeTimeout = null;
+		workbenchApplyNoticeTimeout = window.setTimeout(() => {
+			workbenchApplyNotice = '';
+			workbenchApplyNoticeTimeout = null;
 		}, 7000);
 	}
 
-	function clearScreenshotImportApplyNotice() {
-		screenshotImportApplyNotice = '';
-		if (screenshotImportApplyNoticeTimeout === null) return;
-		window.clearTimeout(screenshotImportApplyNoticeTimeout);
-		screenshotImportApplyNoticeTimeout = null;
+	function clearWorkbenchApplyNotice() {
+		workbenchApplyNotice = '';
+		if (workbenchApplyNoticeTimeout === null) return;
+		window.clearTimeout(workbenchApplyNoticeTimeout);
+		workbenchApplyNoticeTimeout = null;
+	}
+
+	function consumeGearComparisonFragment() {
+		const fragmentParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+		if (!fragmentParams.has(LT_GEAR_FRAGMENT_PARAM)) return;
+
+		const payload = parseGearComparisonFragment(window.location.hash);
+		fragmentParams.delete(LT_GEAR_FRAGMENT_PARAM);
+		const cleanUrl = new URL(window.location.href);
+		cleanUrl.hash = fragmentParams.toString();
+		replaceState(cleanUrl, window.history.state ?? {});
+
+		if (!payload) {
+			showWorkbenchApplyNotice('Gear comparison link could not be imported.');
+			return;
+		}
+
+		pendingGearImports = payload.candidates;
+		processPendingGearImports();
+	}
+
+	function processPendingGearImports() {
+		while (pendingGearImports.length > 0) {
+			const target = findFirstEmptyChangeTarget(calculator);
+			if (!target) {
+				gearImportOpen = true;
+				return;
+			}
+
+			applyGearComparisonCandidate(pendingGearImports[0], target);
+			pendingGearImports = pendingGearImports.slice(1);
+		}
+
+		gearImportOpen = false;
+	}
+
+	function applyGearComparisonCandidate(candidate: GearComparisonCandidate, target: ChangeTarget) {
+		calculator = mergeGearComparisonCandidate(calculator, candidate, target);
+		clearDraftsForPanel(target);
+		const skipped = candidate.omitted.length;
+		const skippedText = skipped === 0
+			? ''
+			: ` ${skipped} unsupported ${skipped === 1 ? 'stat was' : 'stats were'} skipped.`;
+		showWorkbenchApplyNotice(
+			`${candidate.item.pieceType} imported into Change ${target.toUpperCase()}.${skippedText}`
+		);
+	}
+
+	function replaceChangeWithPendingGearImport(target: ChangeTarget) {
+		if (!pendingGearImport) return;
+
+		applyGearComparisonCandidate(pendingGearImport, target);
+		pendingGearImports = pendingGearImports.slice(1);
+		gearImportOpen = false;
+		processPendingGearImports();
+	}
+
+	function cancelPendingGearImports() {
+		pendingGearImports = [];
+		gearImportOpen = false;
+		showWorkbenchApplyNotice('Gear comparison import cancelled.');
 	}
 
 	function setBuffs(next: SelectedBuffs) {
@@ -842,10 +918,10 @@
 				<div class="flex min-w-0 flex-wrap items-center gap-2">
 					<BarChart3Icon class="size-4 text-primary" />
 					<h2 class="text-sm font-semibold">Stat Workbench</h2>
-					{#if screenshotImportApplyNotice}
+					{#if workbenchApplyNotice}
 						<Badge variant="secondary" class="border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200">
 							<CheckIcon data-icon="inline-start" />
-							{screenshotImportApplyNotice}
+							{workbenchApplyNotice}
 						</Badge>
 					{/if}
 				</div>
@@ -1487,6 +1563,55 @@
 	baseStats={calculator.stats}
 	onApply={applyScreenshotImportResult}
 />
+
+<Sheet.Root bind:open={gearImportOpen}>
+	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,30rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
+		<Sheet.Header class="fantasy-sheet-header border-b border-border/80 px-5 py-4">
+			<Sheet.Title>Import gear comparison</Sheet.Title>
+			<Sheet.Description>
+				Both comparison columns already contain values. Choose which one to replace.
+			</Sheet.Description>
+		</Sheet.Header>
+
+		{#if pendingGearImport}
+			<div class="flex flex-col gap-5 p-5">
+				<div class="flex flex-col gap-2">
+					<div class="flex flex-wrap items-center gap-2">
+						<Badge variant="secondary">{pendingGearImport.item.pieceType}</Badge>
+						{#if pendingGearImport.item.enchantLevel !== undefined}
+							<Badge variant="outline">Lv. {pendingGearImport.item.enchantLevel}</Badge>
+						{/if}
+					</div>
+					<p class="text-sm font-medium">{pendingGearImport.label}</p>
+					<p class="text-sm text-muted-foreground">
+						Your base stats, buffs, class preset, settings, and the other comparison column will stay unchanged.
+					</p>
+				</div>
+
+				{#if pendingGearImport.omitted.length > 0}
+					<div class="flex flex-col gap-2 rounded-md border border-border/80 bg-muted/30 p-3">
+						<p class="text-sm font-medium">Not modeled by this calculator</p>
+						<p class="text-sm text-muted-foreground">
+							{pendingGearImport.omitted.map((line) => line.stat).join(', ')}
+						</p>
+					</div>
+				{/if}
+
+				<div class="flex flex-wrap gap-2">
+					<Button onclick={() => replaceChangeWithPendingGearImport('a')}>
+						Replace Change A
+					</Button>
+					<Button variant="secondary" onclick={() => replaceChangeWithPendingGearImport('b')}>
+						Replace Change B
+					</Button>
+					<Button variant="outline" onclick={cancelPendingGearImports}>
+						Cancel
+					</Button>
+				</div>
+			</div>
+		{/if}
+	</Sheet.Content>
+</Sheet.Root>
 
 <Sheet.Root bind:open={transferOpen}>
 	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,36rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
