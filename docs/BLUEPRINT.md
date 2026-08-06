@@ -9,10 +9,14 @@ This repo is a personal SvelteKit SPA for comparing LaTale stat changes, buffs, 
 - `src/lib/calculator/buffs.js`: buff catalog copied from the legacy app.
 - `src/lib/calculator/defaults.js`: default stats, settings, and selected buffs copied from the legacy app.
 - `src/lib/calculator/presets.js`: class factor presets copied from the legacy app.
+- `src/lib/calculator/local-build-library.ts`: named device drafts, migration, and JSON backups.
+- `src/lib/calculator/snapshot-codec.ts`: compressed, versioned, URL-fragment snapshots.
 - `src/lib/calculator/formula.test.ts`: regression tests for legacy default damage and equivalence output.
+- `src/lib/schema.ts` and `src/lib/permissions.ts`: Jazz live-build storage and access rules.
+- `src/routes/api/live-builds`: accountless live-link HTTP API.
 - `src/routes/+page.svelte`: shadcn-svelte calculator interface.
 - `src/routes/+layout.ts`: SPA mode, prerendered with SSR disabled.
-- `svelte.config.js`: static adapter with `index.html` fallback.
+- `svelte.config.js`: Vercel adapter for the prerendered calculator and server API routes.
 
 ## Formula Contract
 
@@ -38,7 +42,8 @@ If formula behavior changes intentionally, update `formula.test.ts` in the same 
 3. Selected buffs are normalized against the buff catalog so newly added buff groups appear as `None` by default.
 4. Buffs are summed as stat deltas, then applied with `applyChanges`.
 5. Defenses come from `TARGETS` in `model.ts`; target additions should include normal and boss profiles with `multiplier`, `flat`, `mitigation`, and `phasing`.
-6. Reports are derived from current state and persisted to `localStorage` under `ltdc:state:v2`.
+6. Reports are derived from current state and saved in the named-build library under
+   `ltdc:library:v1`; existing `ltdc:state:v2` data migrates on first load.
 
 ## Updating Formulas Or Balance Data
 
@@ -57,7 +62,8 @@ npm run build
 
 ## SPA And UI Notes
 
-- The app uses SvelteKit with `@sveltejs/adapter-static` and an `index.html` fallback.
+- The calculator remains a client-rendered, prerendered SvelteKit page; live-build APIs run as
+  Vercel functions through `@sveltejs/adapter-vercel`.
 - shadcn-svelte is initialized with the Luma style and Zinc base color.
 - Keep the first viewport as the working calculator, not a landing page.
 - Use compact controls and tables; this is an operational comparison tool.

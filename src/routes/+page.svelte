@@ -1,22 +1,25 @@
 <svelte:options runes={true} />
 
 <script lang="ts">
-	import { afterNavigate, replaceState } from '$app/navigation';
+	import { replaceState } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import favicon from '$lib/assets/favicon.ico';
-	import { tick } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { getDb } from 'jazz-tools/svelte';
+	import { RecoveryPhrase } from 'jazz-tools/passphrase';
 	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
+	import AlertTriangleIcon from '@lucide/svelte/icons/triangle-alert';
 	import BadgePercentIcon from '@lucide/svelte/icons/badge-percent';
 	import BarChart3Icon from '@lucide/svelte/icons/bar-chart-3';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import CopyIcon from '@lucide/svelte/icons/copy';
-	import ClipboardCopyIcon from '@lucide/svelte/icons/clipboard-copy';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
-	import DownloadIcon from '@lucide/svelte/icons/download';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
+	import GitForkIcon from '@lucide/svelte/icons/git-fork';
 	import ImageUpIcon from '@lucide/svelte/icons/image-up';
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import LockIcon from '@lucide/svelte/icons/lock';
@@ -26,7 +29,6 @@
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import TargetIcon from '@lucide/svelte/icons/target';
-	import UploadIcon from '@lucide/svelte/icons/upload';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { getClassArt } from '$lib/calculator/class-art.js';
 	import { isDisplayedTie } from '$lib/calculator/comparison.js';
@@ -64,7 +66,10 @@
 		type GearComparisonCandidate
 	} from '$lib/calculator/gear-comparison-import.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
+	import * as Alert from '$lib/components/ui/alert/index.js';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import * as Card from '$lib/components/ui/card/index.js';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
 	import * as Command from '$lib/components/ui/command/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -79,10 +84,60 @@
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
-	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import BuildsSharingSheet from '$lib/components/builds-sharing-sheet.svelte';
+	import LiveBuildSubscription from '$lib/components/live-build-subscription.svelte';
+	import type {
+		BuildsSharingMode,
+		BuildsSharingStatus,
+		BuildSummary,
+		LiveShareSummary
+	} from '$lib/components/builds-sharing.js';
 	import ClassArtRail from '$lib/components/class-art-rail.svelte';
 	import ScreenshotImportSheet from '$lib/components/screenshot-import-sheet.svelte';
 	import ThemeToggle from '$lib/components/theme-toggle.svelte';
+	import { getJazzAuthContext } from '$lib/jazz-auth-context.js';
+	import {
+		addLocalBuild,
+		createLocalBuildLibrary,
+		deleteLocalBuild,
+		duplicateLocalBuild,
+		getActiveLocalBuild,
+		loadLocalBuildLibrary,
+		mergeLocalBuildBackup,
+		LOCAL_BUILD_LIBRARY_KEY,
+		parseLegacyCalculatorStateBackup,
+		parseLocalBuildLibrary,
+		renameLocalBuild,
+		resetLocalBuild,
+		saveLocalBuildLibrary,
+		serializeLocalBuildBackup,
+		setActiveLocalBuild,
+		updateLocalBuildLiveShare,
+		updateLocalBuildState,
+		type LocalBuild,
+		type LocalBuildLibrary
+	} from '$lib/calculator/local-build-library.js';
+	import {
+		createSnapshotEnvelope,
+		decodeSnapshotHash,
+		encodeSnapshotHash,
+		isSnapshotHash,
+		readSnapshotFrozenSummary,
+		type SnapshotCompatibility,
+		type SnapshotEnvelopeV1
+	} from '$lib/calculator/snapshot-codec.js';
+	import {
+		buildLiveBuildChanges,
+		createLiveBuild,
+		fetchLiveBuild,
+		LiveBuildApiError,
+		patchLiveBuild,
+		redeemLiveBuildEdit,
+		rotateLiveBuildEditLink,
+		setLiveBuildPinned,
+		stopLiveBuild
+	} from '$lib/live-builds/client.js';
+	import type { LiveBuildResource } from '$lib/live-builds/contracts.js';
 	import {
 		applyClassPreset,
 		applyQuickPreset,
@@ -96,14 +151,12 @@
 		matchClassPreset,
 		normalizeState,
 		numericStatsToUi,
-		parseStoredState,
 		PERCENTLESS_STATS,
 		QUICK_FACTOR_PRESETS,
 		serializeState,
 		signedTone,
 		STAT_KEYS,
 		STAT_LABELS,
-		STORAGE_KEY,
 		TARGETS,
 		toggleBuffTier,
 		setChoiceBuff,
@@ -116,6 +169,7 @@
 	} from '$lib/calculator/model.js';
 
 	const ENEMY_TYPES: EnemyType[] = ['normal', 'boss'];
+	const RECOVERY_ACK_KEY = 'ltdc:jazz-recovery-ack:v1';
 	const numberFormatter = new Intl.NumberFormat('en-US', {
 		maximumFractionDigits: 2
 	});
@@ -159,11 +213,39 @@
 	let buffsOpen = $state(false);
 	let equivalenceOpen = $state(false);
 	let auditOpen = $state(false);
-	let transferOpen = $state(false);
+	let buildsSharingOpen = $state(false);
+	let recoveryDialogOpen = $state(false);
+	let editLinkConfirmOpen = $state(false);
 	let screenshotImportOpen = $state(false);
 	let gearImportOpen = $state(false);
-	let transferText = $state('');
-	let transferStatus = $state('');
+	let localLibrary = $state.raw<LocalBuildLibrary>(createLocalBuildLibrary());
+	let workspaceMode = $state<BuildsSharingMode>('device');
+	let liveBuild = $state.raw<LiveBuildResource | null>(null);
+	let liveEditBaseEnvelope = $state.raw<SnapshotEnvelopeV1 | null>(null);
+	let liveSlug = $state('');
+	let liveLocalBuildId = $state<string | null>(null);
+	let pendingEditSecret = '';
+	let currentEditSecret = $state<string | null>(null);
+	let snapshotEnvelope = $state.raw<SnapshotEnvelopeV1 | null>(null);
+	let snapshotCompatibility = $state.raw<SnapshotCompatibility | null>(null);
+	let snapshotInputsLoaded = $state(false);
+	let snapshotUrl = $state<string | null>(null);
+	let recoveryPhrase = $state<string | null>(null);
+	let storageError = $state<string | null>(null);
+	let storageErrorDismissed = $state(false);
+	let sharingError = $state<string | null>(null);
+	let liveSyncState = $state<'idle' | 'loading' | 'syncing' | 'synced' | 'offline' | 'error'>('idle');
+	let liveConflict = $state(false);
+	let conflictRemoteBuild = $state.raw<LiveBuildResource | null>(null);
+	let backupInput: HTMLInputElement | null = null;
+	let lastLocalStateJson = '';
+	let lastLocalAutosaveAttemptJson = '';
+	let liveSaveTimer: number | null = null;
+	let liveSaveInFlight: Promise<void> | null = null;
+	let liveSaveRequested = false;
+	let liveLinkRotationInProgress = false;
+	let liveConnectionGeneration = 0;
+	let locationGeneration = 0;
 	let workbenchApplyNotice = $state('');
 	let workbenchApplyNoticeTimeout: number | null = null;
 	let pendingGearImports = $state<GearComparisonCandidate[]>([]);
@@ -174,6 +256,101 @@
 	let draftStatInputs = $state.raw<Record<string, string>>({});
 	let equivalenceValues = $state({ perc: 1, critical: 10 });
 	const visiblePrimaryVerdicts = new SvelteSet<Element>();
+	const db = getDb();
+	const jazzAuth = getJazzAuthContext();
+
+	const activeLocalBuild = $derived(getActiveLocalBuild(localLibrary));
+	const readOnlyWorkspace = $derived(
+		workspaceMode === 'live-view' || workspaceMode === 'snapshot-view'
+	);
+	const sharedWorkspaceReady = $derived(
+		workspaceMode === 'live-edit' ||
+		(workspaceMode === 'live-view' && Boolean(liveBuild)) ||
+		(workspaceMode === 'snapshot-view' && Boolean(snapshotEnvelope))
+	);
+	const canForkSharedWorkspace = $derived(
+		workspaceMode === 'live-edit' ||
+		(workspaceMode === 'live-view' && Boolean(liveBuild)) ||
+		(workspaceMode === 'snapshot-view' && snapshotInputsLoaded)
+	);
+	const snapshotFrozenSummary = $derived(
+		snapshotEnvelope ? readSnapshotFrozenSummary(snapshotEnvelope) : undefined
+	);
+	const snapshotNeedsFrozenResults = $derived(
+		workspaceMode === 'snapshot-view' &&
+		Boolean(snapshotFrozenSummary) &&
+		(snapshotCompatibility?.formula !== 'current' || !snapshotInputsLoaded)
+	);
+	const snapshotFrozenOnly = $derived(
+		workspaceMode === 'snapshot-view' && Boolean(snapshotEnvelope) && !snapshotInputsLoaded
+	);
+	const displayedBuildTitle = $derived(
+		snapshotEnvelope?.title ?? liveBuild?.title ?? activeLocalBuild.name
+	);
+	const buildSummaries = $derived.by(() => {
+		const currentLiveBuild = liveBuild;
+		return localLibrary.builds.map((build) => ({
+			id: build.id,
+			name: build.name,
+			updatedAt: build.updatedAt,
+			hasLiveShare: Boolean(build.liveShare),
+			liveSharePinned:
+				Boolean(build.liveShare) && currentLiveBuild && currentLiveBuild.publicSlug === build.liveShare?.publicSlug
+					? currentLiveBuild.pinned
+					: undefined,
+			liveShareExpiresAt:
+				currentLiveBuild && currentLiveBuild.publicSlug === build.liveShare?.publicSlug
+					? currentLiveBuild.expiresAt
+					: undefined
+		})) satisfies BuildSummary[];
+	});
+	const liveShareSummary = $derived.by((): LiveShareSummary | null => {
+		const slug = liveSlug || activeLocalBuild.liveShare?.publicSlug;
+		if (!slug) return null;
+		const localShare = liveLocalBuildId
+			? localLibrary.builds.find((build) => build.id === liveLocalBuildId)?.liveShare
+			: undefined;
+		const secret = localShare?.publicSlug === slug
+			? currentEditSecret ?? localShare.editSecret ?? null
+			: null;
+		const access = liveBuild?.role === 'creator'
+			? 'owner'
+			: liveBuild?.role === 'editor' || workspaceMode === 'live-edit'
+				? 'editor'
+				: 'viewer';
+		return {
+			access,
+			state: liveBuild && liveBuild.expiresAt && new Date(liveBuild.expiresAt).getTime() <= Date.now()
+				? 'expired'
+				: 'active',
+			viewUrl: liveBuildUrl(slug),
+			editUrl: secret ? liveBuildUrl(slug, secret) : null,
+			pinned: liveBuild?.pinned ?? false,
+			expiresAt: liveBuild?.expiresAt,
+			lastEditedAt: liveBuild?.lastEditedAt,
+			revision: liveBuild?.revision ?? activeLocalBuild.liveShare?.revision
+		};
+	});
+	const sharingStatus = $derived.by((): BuildsSharingStatus => {
+		if (workspaceMode === 'snapshot-view') {
+			return { kind: 'read-only', label: 'Read-only · Snapshot' };
+		}
+		if (workspaceMode === 'live-view') {
+			return {
+				kind: liveSyncState === 'error' ? 'error' : 'read-only',
+				label: liveSyncState === 'loading' ? 'Loading shared build' : 'Read-only · Live'
+			};
+		}
+		if (liveSyncState === 'loading') return { kind: 'syncing', label: 'Connecting live share' };
+		if (liveSyncState === 'syncing') return { kind: 'syncing', label: 'Syncing' };
+		if (liveSyncState === 'offline') {
+			return { kind: 'offline', label: 'Offline · saved on this device' };
+		}
+		if (liveSyncState === 'error') return { kind: 'error', label: "Couldn't sync" };
+		if (workspaceMode === 'live-edit') return { kind: 'synced', label: 'Shared · Up to date' };
+		if (storageError) return { kind: 'error', label: 'Not saved on this device' };
+		return { kind: 'saved', label: 'Saved on this device' };
+	});
 
 	const report = $derived(calculateDashboard(calculator));
 	const activeClassPreset = $derived(matchClassPreset(calculator.settings));
@@ -246,23 +423,78 @@
 	const hasBChanges = $derived(panelHasEnteredValues(calculator.statsB));
 	const pendingGearImport = $derived(pendingGearImports[0]);
 
-	afterNavigate(() => {
-		if (!hydrated) {
-			const stored = window.localStorage.getItem(STORAGE_KEY);
-			if (stored) {
-				calculator = parseStoredState(stored);
-			} else {
-				const legacy = readLegacyState();
-				if (legacy) calculator = normalizeState(legacy);
+	onMount(() => {
+		void initializeWorkspaceFromLocation();
+		const handleHashChange = () => void initializeWorkspaceFromLocation();
+		const handleStorage = (event: StorageEvent) => {
+			if (event.key !== LOCAL_BUILD_LIBRARY_KEY || !event.newValue || storageError) return;
+			try {
+				let incoming = parseLocalBuildLibrary(event.newValue);
+				if (workspaceMode === 'live-edit' && liveLocalBuildId) {
+					const localLiveBuild = localLibrary.builds.find((build) => build.id === liveLocalBuildId);
+					if (localLiveBuild) {
+						const remoteIndex = incoming.builds.findIndex((build) => build.id === liveLocalBuildId);
+						const builds = [...incoming.builds];
+						if (remoteIndex === -1) builds.push(localLiveBuild);
+						else if (new Date(localLiveBuild.updatedAt) > new Date(builds[remoteIndex].updatedAt)) {
+							builds[remoteIndex] = localLiveBuild;
+						}
+						incoming = { ...incoming, activeBuildId: liveLocalBuildId, builds };
+					}
+				}
+				localLibrary = incoming;
+				if (workspaceMode === 'device') {
+					setCalculatorState(getActiveLocalBuild(incoming).state);
+					if (getActiveLocalBuild(incoming).liveShare) void connectActiveLiveShare();
+				}
+			} catch {
+				// Ignore partially written or future-version values from another tab.
 			}
-		}
-		consumeGearComparisonFragment();
-		hydrated = true;
+		};
+		window.addEventListener('hashchange', handleHashChange);
+		window.addEventListener('storage', handleStorage);
+		return () => {
+			window.removeEventListener('hashchange', handleHashChange);
+			window.removeEventListener('storage', handleStorage);
+		};
 	});
 
 	$effect(() => {
-		if (!hydrated) return;
-		window.localStorage.setItem(STORAGE_KEY, serializeState(calculator));
+		const serialized = serializeState(calculator);
+		if (
+			!hydrated ||
+			readOnlyWorkspace ||
+			serialized === lastLocalStateJson ||
+			serialized === lastLocalAutosaveAttemptJson
+		) return;
+		const buildId = workspaceMode === 'live-edit' ? liveLocalBuildId : localLibrary.activeBuildId;
+		if (!buildId) return;
+		lastLocalAutosaveAttemptJson = serialized;
+		if (persistLocalLibrary(updateLocalBuildState(localLibrary, buildId, calculator))) {
+			lastLocalStateJson = serialized;
+		}
+	});
+
+	$effect(() => {
+		serializeState(calculator);
+		if (!hydrated || workspaceMode !== 'live-edit' || !liveBuild || !liveEditBaseEnvelope) {
+			return;
+		}
+		const nextEnvelope = createLiveEnvelope();
+		if (buildLiveBuildChanges(liveEditBaseEnvelope, nextEnvelope).length === 0) return;
+
+		if (liveSaveTimer !== null) window.clearTimeout(liveSaveTimer);
+		liveSaveTimer = window.setTimeout(() => {
+			liveSaveTimer = null;
+			void saveLiveBuildNow();
+		}, 1500);
+
+		return () => {
+			if (liveSaveTimer !== null) {
+				window.clearTimeout(liveSaveTimer);
+				liveSaveTimer = null;
+			}
+		};
 	});
 
 	$effect(() => {
@@ -270,6 +502,7 @@
 			if (workbenchApplyNoticeTimeout !== null) {
 				window.clearTimeout(workbenchApplyNoticeTimeout);
 			}
+			if (liveSaveTimer !== null) window.clearTimeout(liveSaveTimer);
 		};
 	});
 
@@ -280,26 +513,101 @@
 		};
 	};
 
-	function readLegacyState() {
-		const legacyKeys = ['ltdcStats', 'ltdcStatsA', 'ltdcStatsB', 'ltdcSettings', 'ltdcSelectedBuffs'];
-		if (!legacyKeys.some((key) => window.localStorage.getItem(key) !== null)) return null;
-		return {
-			stats: parseLegacyItem('ltdcStats'),
-			statsA: parseLegacyItem('ltdcStatsA'),
-			statsB: parseLegacyItem('ltdcStatsB'),
-			settings: parseLegacyItem('ltdcSettings'),
-			selectedBuffs: parseLegacyItem('ltdcSelectedBuffs')
-		};
+	async function initializeWorkspaceFromLocation() {
+		const generation = ++locationGeneration;
+		invalidateLiveConnection();
+		if (!hydrated) {
+			const loaded = loadLocalBuildLibrary(window.localStorage);
+			localLibrary = loaded.library;
+			if (!loaded.ok) storageError = loaded.error.message;
+			const active = getActiveLocalBuild(localLibrary);
+			setCalculatorState(active.state);
+			hydrated = true;
+			if (loaded.ok && loaded.migrated) persistLocalLibrary(localLibrary);
+		}
+
+		const hash = window.location.hash;
+		if (isSnapshotHash(hash)) {
+			workspaceMode = 'snapshot-view';
+			liveSlug = '';
+			liveBuild = null;
+			liveEditBaseEnvelope = null;
+			liveLocalBuildId = null;
+			currentEditSecret = null;
+			pendingEditSecret = '';
+			editLinkConfirmOpen = false;
+			clearLiveConflict();
+			snapshotEnvelope = null;
+			snapshotCompatibility = null;
+			snapshotInputsLoaded = false;
+			snapshotUrl = null;
+			await openSnapshotLink(hash, generation);
+			return;
+		}
+
+		const params = new URLSearchParams(hash.replace(/^#/, ''));
+		const sharedSlug = params.get('share')?.trim();
+		if (sharedSlug) {
+			workspaceMode = 'live-view';
+			liveSlug = sharedSlug;
+			liveBuild = null;
+			liveEditBaseEnvelope = null;
+			liveLocalBuildId = null;
+			currentEditSecret = null;
+			clearLiveConflict();
+			snapshotEnvelope = null;
+			snapshotCompatibility = null;
+			snapshotInputsLoaded = false;
+			snapshotUrl = null;
+			pendingEditSecret = params.get('edit')?.trim() ?? '';
+			if (pendingEditSecret) removeEditSecretFromLocation();
+			await openLiveBuildLink(sharedSlug, generation);
+			return;
+		}
+
+		if (workspaceMode === 'live-view' || workspaceMode === 'snapshot-view') {
+			openLocalBuild(localLibrary.activeBuildId, false);
+		}
+		consumeGearComparisonFragment();
+		if (activeLocalBuild.liveShare) void connectActiveLiveShare();
 	}
 
-	function parseLegacyItem(key: string) {
-		const item = window.localStorage.getItem(key);
-		if (!item) return undefined;
-		try {
-			return JSON.parse(item);
-		} catch {
-			return undefined;
+	function setCalculatorState(state: CalculatorState) {
+		calculator = normalizeState(state);
+		lastLocalStateJson = serializeState(calculator);
+		lastLocalAutosaveAttemptJson = lastLocalStateJson;
+		clearAllStatDrafts();
+	}
+
+	function persistLocalLibrary(nextLibrary: LocalBuildLibrary): boolean {
+		localLibrary = nextLibrary;
+		const result = saveLocalBuildLibrary(window.localStorage, nextLibrary);
+		if (result.ok) {
+			storageError = null;
+			storageErrorDismissed = false;
+			return true;
 		}
+		storageError = result.error.message;
+		storageErrorDismissed = false;
+		return false;
+	}
+
+	function retryLocalSave() {
+		if (readOnlyWorkspace) return;
+		lastLocalAutosaveAttemptJson = serializeState(calculator);
+		if (persistLocalLibrary(localLibrary)) {
+			lastLocalStateJson = lastLocalAutosaveAttemptJson;
+		}
+	}
+
+	function clearLiveConflict() {
+		liveConflict = false;
+		conflictRemoteBuild = null;
+	}
+
+	function invalidateLiveConnection() {
+		liveConnectionGeneration += 1;
+		liveSaveRequested = false;
 	}
 
 	function setStat(stats: UiStats, key: StatKey, index: 0 | 1, inputId: string, draftValue: string) {
@@ -340,9 +648,10 @@
 	}
 
 	function resetAll() {
+		if (readOnlyWorkspace) return;
 		calculator = createDefaultState();
-		transferStatus = 'Reset.';
 		clearWorkbenchApplyNotice();
+		showWorkbenchApplyNotice('Current build reset.');
 		clearAllStatDrafts();
 	}
 
@@ -365,25 +674,723 @@
 		calculator.settings[key] = value;
 	}
 
-	function exportData() {
-		transferText = serializeState(calculator);
-		transferStatus = 'Exported.';
+	function liveBuildUrl(slug: string, editSecret?: string) {
+		const url = new URL(window.location.href);
+		url.hash = new URLSearchParams({
+			share: slug,
+			...(editSecret ? { edit: editSecret } : {})
+		}).toString();
+		return url.toString();
 	}
 
-	function importData() {
+	function replaceCurrentHash(params?: URLSearchParams) {
+		const url = new URL(window.location.href);
+		url.hash = params?.toString() ?? '';
+		replaceState(resolve(`/${url.search}${url.hash}` as '/'), window.history.state ?? {});
+	}
+
+	function createLiveEnvelope(state: CalculatorState = calculator) {
+		return createSnapshotEnvelope({
+			title: workspaceMode === 'live-edit' && liveLocalBuildId
+				? localLibrary.builds.find((build) => build.id === liveLocalBuildId)?.name ?? displayedBuildTitle
+				: displayedBuildTitle,
+			state,
+			createdAt: liveEditBaseEnvelope?.createdAt ?? liveBuild?.snapshot.createdAt
+		});
+	}
+
+	function hasUnsavedLiveChanges() {
+		if (!liveEditBaseEnvelope || workspaceMode !== 'live-edit') return false;
+		return buildLiveBuildChanges(liveEditBaseEnvelope, createLiveEnvelope()).length > 0;
+	}
+
+	async function openSnapshotLink(hash: string, generation: number) {
+		sharingError = null;
 		try {
-			calculator = parseStoredState(transferText);
-			transferStatus = 'Imported.';
-			clearAllStatDrafts();
-		} catch {
-			transferStatus = 'Import failed.';
+			const decoded = await decodeSnapshotHash(hash);
+			if (generation !== locationGeneration) return;
+			if (!decoded.compatibility.canLoadState && !readSnapshotFrozenSummary(decoded.envelope)) {
+				throw new Error(
+					'This newer snapshot does not contain frozen results that this calculator can display.'
+				);
+			}
+			snapshotEnvelope = decoded.envelope;
+			snapshotCompatibility = decoded.compatibility;
+			snapshotInputsLoaded = decoded.compatibility.canLoadState;
+			snapshotUrl = window.location.href;
+			if (decoded.compatibility.canLoadState) setCalculatorState(decoded.envelope.state);
+			sharingError = decoded.compatibility.warnings.join(' ') || null;
+			liveSyncState = 'idle';
+		} catch (error) {
+			if (generation !== locationGeneration) return;
+			snapshotEnvelope = null;
+			snapshotCompatibility = null;
+			snapshotInputsLoaded = false;
+			sharingError = error instanceof Error
+				? error.message
+				: 'This snapshot link is damaged or was created by a newer app version.';
+			liveSyncState = 'error';
 		}
 	}
 
-	async function copyTransfer() {
-		if (!transferText) return;
-		await navigator.clipboard.writeText(transferText);
-		transferStatus = 'Copied.';
+	async function openLiveBuildLink(slug: string, generation: number) {
+		sharingError = null;
+		liveSyncState = 'loading';
+		try {
+			const { build } = await fetchLiveBuild(slug, db);
+			if (generation !== locationGeneration || slug !== liveSlug) return;
+			liveBuild = build;
+			liveEditBaseEnvelope = build.snapshot;
+			snapshotEnvelope = null;
+			snapshotCompatibility = null;
+			setCalculatorState(build.snapshot.state);
+			liveSyncState = 'synced';
+			if (pendingEditSecret) editLinkConfirmOpen = true;
+		} catch (error) {
+			if (generation !== locationGeneration) return;
+			handleLiveError(error, 'Shared build unavailable. The link is invalid or sharing was stopped.');
+		}
+	}
+
+	async function connectActiveLiveShare() {
+		const build = getActiveLocalBuild(localLibrary);
+		const share = build.liveShare;
+		if (!share) return;
+		const generation = ++liveConnectionGeneration;
+		const buildId = build.id;
+		const slug = share.publicSlug;
+		const editSecret = share.editSecret ?? null;
+		liveSlug = slug;
+		liveLocalBuildId = buildId;
+		currentEditSecret = editSecret;
+		liveSyncState = navigator.onLine ? 'loading' : 'offline';
+		sharingError = null;
+		try {
+			const { build: remote } = await fetchLiveBuild(slug, db);
+			const active = getActiveLocalBuild(localLibrary);
+			if (
+				generation !== liveConnectionGeneration ||
+				active.id !== buildId ||
+				active.liveShare?.publicSlug !== slug
+			) return;
+			liveBuild = remote;
+			if (remote.role === 'viewer') {
+				detachRevokedLiveShare(
+					'This device no longer has edit access. Your local draft was kept unchanged.'
+				);
+				return;
+			}
+
+			workspaceMode = 'live-edit';
+			const lastSyncedState = share.lastSyncedState;
+			liveEditBaseEnvelope = lastSyncedState
+				? createSnapshotEnvelope({
+						title: remote.title,
+						state: lastSyncedState,
+						createdAt: remote.snapshot.createdAt
+					})
+				: remote.snapshot;
+
+			if (
+				(lastSyncedState && serializeState(lastSyncedState) === serializeState(build.state)) ||
+				(!lastSyncedState && share.revision < remote.revision)
+			) {
+				setCalculatorState(remote.snapshot.state);
+				recordLiveSync(
+					remote,
+					remote.snapshot.state,
+					remote.snapshot.state,
+					buildId,
+					editSecret
+				);
+			}
+			liveSyncState = hasUnsavedLiveChanges() ? 'syncing' : 'synced';
+		} catch (error) {
+			if (generation !== liveConnectionGeneration) return;
+			workspaceMode = 'live-edit';
+			handleLiveError(error, 'Could not reconnect this live share. Your draft is still saved on this device.');
+		}
+	}
+
+	function removeEditSecretFromLocation() {
+		const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+		params.delete('edit');
+		replaceCurrentHash(params);
+	}
+
+	function stripEditSecret() {
+		removeEditSecretFromLocation();
+		pendingEditSecret = '';
+	}
+
+	function declineEditLink() {
+		stripEditSecret();
+		editLinkConfirmOpen = false;
+	}
+
+	function handleEditLinkDialogChange(open: boolean) {
+		editLinkConfirmOpen = open;
+		if (!open && pendingEditSecret) stripEditSecret();
+	}
+
+	async function acceptEditLink() {
+		if (!liveSlug || !pendingEditSecret || !liveBuild) return;
+		const generation = locationGeneration;
+		const slug = liveSlug;
+		const requestedSecret = pendingEditSecret;
+		liveSyncState = 'syncing';
+		sharingError = null;
+		try {
+			const response = await redeemLiveBuildEdit(db, slug, requestedSecret);
+			if (generation !== locationGeneration || slug !== liveSlug) return;
+			const secret = requestedSecret;
+			stripEditSecret();
+			editLinkConfirmOpen = false;
+			liveBuild = response.build;
+			liveEditBaseEnvelope = response.build.snapshot;
+			currentEditSecret = secret;
+
+			let nextLibrary = localLibrary;
+			let localBuild = nextLibrary.builds.find(
+				(build) => build.liveShare?.publicSlug === response.build.publicSlug
+			);
+			if (!localBuild) {
+				nextLibrary = addLocalBuild(nextLibrary, {
+					name: response.build.title,
+					state: response.build.snapshot.state
+				});
+				localBuild = getActiveLocalBuild(nextLibrary);
+			} else {
+				nextLibrary = setActiveLocalBuild(nextLibrary, localBuild.id);
+				nextLibrary = updateLocalBuildState(nextLibrary, localBuild.id, response.build.snapshot.state);
+			}
+			nextLibrary = updateLocalBuildLiveShare(nextLibrary, localBuild.id, {
+				publicSlug: response.build.publicSlug,
+				editSecret: secret,
+				revision: response.build.revision,
+				lastSyncedState: response.build.snapshot.state
+			});
+			persistLocalLibrary(nextLibrary);
+			liveLocalBuildId = localBuild.id;
+			liveConnectionGeneration += 1;
+			workspaceMode = 'live-edit';
+			setCalculatorState(response.build.snapshot.state);
+			liveSyncState = 'synced';
+		} catch (error) {
+			if (generation !== locationGeneration || slug !== liveSlug) return;
+			stripEditSecret();
+			editLinkConfirmOpen = false;
+			workspaceMode = 'live-view';
+			handleLiveError(error, 'Edit access unavailable. You can keep viewing or fork this build.');
+		}
+	}
+
+	async function createSnapshotLink() {
+		const envelope = createSnapshotEnvelope({ title: displayedBuildTitle, state: calculator });
+		const hash = await encodeSnapshotHash(envelope);
+		const url = new URL(window.location.href);
+		url.hash = hash.slice(1);
+		snapshotUrl = url.toString();
+		return snapshotUrl;
+	}
+
+	async function createCurrentLiveShare() {
+		if (!jazzAuth.configured) {
+			throw new Error('Live sharing is not configured for this deployment. Snapshot links still work.');
+		}
+		if (readOnlyWorkspace) throw new Error('Fork this build to your device before sharing it.');
+		const localBuild = getActiveLocalBuild(localLibrary);
+		if (localBuild.liveShare) {
+			await connectActiveLiveShare();
+			return;
+		}
+
+		const generation = ++liveConnectionGeneration;
+		const localBuildId = localBuild.id;
+		const sharedState = normalizeState(calculator);
+		liveSyncState = 'syncing';
+		sharingError = null;
+		try {
+			const response = await createLiveBuild(db, {
+				title: localBuild.name,
+				snapshot: createSnapshotEnvelope({ title: localBuild.name, state: sharedState })
+			});
+			if (!localLibrary.builds.some((build) => build.id === localBuildId)) {
+				await stopLiveBuild(db, response.build.publicSlug);
+				return;
+			}
+			persistLocalLibrary(updateLocalBuildLiveShare(localLibrary, localBuildId, {
+				publicSlug: response.build.publicSlug,
+				editSecret: response.editSecret,
+				revision: response.build.revision,
+				lastSyncedState: response.build.snapshot.state
+			}));
+			if (
+				generation !== liveConnectionGeneration ||
+				getActiveLocalBuild(localLibrary).id !== localBuildId
+			) return;
+			liveBuild = response.build;
+			liveEditBaseEnvelope = response.build.snapshot;
+			liveSlug = response.build.publicSlug;
+			liveLocalBuildId = localBuildId;
+			currentEditSecret = response.editSecret;
+			workspaceMode = 'live-edit';
+			liveSyncState = 'synced';
+
+			if (!window.localStorage.getItem(RECOVERY_ACK_KEY) && jazzAuth.auth.secret) {
+				recoveryPhrase = RecoveryPhrase.fromSecret(jazzAuth.auth.secret);
+				recoveryDialogOpen = true;
+			}
+		} catch (error) {
+			if (generation !== liveConnectionGeneration) return;
+			handleLiveError(error, 'Could not create the live share. This draft is still saved on your device.');
+			throw error;
+		}
+	}
+
+	async function saveLiveBuildNow(): Promise<void> {
+		liveSaveRequested = true;
+		if (liveLinkRotationInProgress) return;
+		if (liveSaveInFlight) return liveSaveInFlight;
+
+		const operation = (async () => {
+			while (liveSaveRequested) {
+				liveSaveRequested = false;
+				const saved = await saveLiveBuildPass();
+				if (!saved) break;
+				if (workspaceMode === 'live-edit' && hasUnsavedLiveChanges()) {
+					liveSaveRequested = true;
+				}
+			}
+		})();
+		liveSaveInFlight = operation;
+		try {
+			await operation;
+		} finally {
+			if (liveSaveInFlight === operation) liveSaveInFlight = null;
+		}
+	}
+
+	async function saveLiveBuildPass(): Promise<boolean> {
+		if (workspaceMode !== 'live-edit' || !liveBuild || !liveEditBaseEnvelope || !liveSlug) {
+			return false;
+		}
+		const generation = liveConnectionGeneration;
+		const slug = liveSlug;
+		const localBuildId = liveLocalBuildId;
+		const editSecret = currentEditSecret;
+		const baseRevision = liveBuild.revision;
+		const nextEnvelope = createLiveEnvelope();
+		const changes = buildLiveBuildChanges(liveEditBaseEnvelope, nextEnvelope);
+		if (changes.length === 0) {
+			liveSyncState = 'synced';
+			return false;
+		}
+
+		liveSyncState = navigator.onLine ? 'syncing' : 'offline';
+		if (!navigator.onLine) return false;
+		sharingError = null;
+		try {
+			const { build } = await patchLiveBuild(db, slug, {
+				baseRevision,
+				changes
+			});
+			if (
+				generation !== liveConnectionGeneration ||
+				workspaceMode !== 'live-edit' ||
+				liveSlug !== slug ||
+				liveLocalBuildId !== localBuildId
+			) return false;
+			liveBuild = build;
+			liveEditBaseEnvelope = build.snapshot;
+			clearLiveConflict();
+			recordLiveSync(
+				build,
+				build.snapshot.state,
+				calculator,
+				localBuildId,
+				editSecret
+			);
+			liveSyncState = hasUnsavedLiveChanges() ? 'syncing' : 'synced';
+			return true;
+		} catch (error) {
+			if (generation !== liveConnectionGeneration || liveSlug !== slug) return false;
+			if (error instanceof LiveBuildApiError && error.code === 'conflict' && error.build) {
+				liveConflict = true;
+				conflictRemoteBuild = error.build;
+				liveSyncState = 'error';
+				sharingError = 'The same field changed elsewhere. Load the shared version or fork your local edits.';
+				return false;
+			}
+			if (
+				error instanceof LiveBuildApiError &&
+				(error.code === 'forbidden' || error.code === 'not_found' || error.code === 'expired')
+			) {
+				detachRevokedLiveShare(
+					'This live share is no longer writable. Your unsynced changes remain in this device draft.'
+				);
+				return false;
+			}
+			handleLiveError(error, 'Could not sync. Your changes remain saved on this device.');
+			return false;
+		}
+	}
+
+	function recordLiveSync(
+		build: LiveBuildResource,
+		syncedState: CalculatorState,
+		localState: CalculatorState = syncedState,
+		localBuildId: string | null = liveLocalBuildId,
+		editSecret: string | null = currentEditSecret
+	) {
+		if (!localBuildId) return;
+		const localBuild = localLibrary.builds.find((candidate) => candidate.id === localBuildId);
+		if (!localBuild || localBuild.liveShare?.publicSlug !== build.publicSlug) return;
+		const stillCurrentSecret =
+			liveSlug === build.publicSlug && currentEditSecret
+				? currentEditSecret
+				: editSecret === localBuild.liveShare.editSecret
+					? editSecret
+					: localBuild.liveShare.editSecret;
+		let nextLibrary = updateLocalBuildState(localLibrary, localBuildId, localState);
+		nextLibrary = updateLocalBuildLiveShare(nextLibrary, localBuildId, {
+			publicSlug: build.publicSlug,
+			...(stillCurrentSecret ? { editSecret: stillCurrentSecret } : {}),
+			revision: build.revision,
+			lastSyncedState: syncedState
+		});
+		persistLocalLibrary(nextLibrary);
+	}
+
+	async function refreshLiveBuild() {
+		if (!liveSlug) return;
+		const generation = liveConnectionGeneration;
+		const slug = liveSlug;
+		const localBuildId = liveLocalBuildId;
+		try {
+			const { build } = await fetchLiveBuild(slug, db);
+			if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
+			if (workspaceMode === 'live-edit' && build.role === 'viewer') {
+				detachRevokedLiveShare(
+					'Edit access was revoked. Your local draft was kept unchanged.'
+				);
+				return;
+			}
+			if (workspaceMode === 'live-edit' && hasUnsavedLiveChanges()) {
+				void saveLiveBuildNow();
+				return;
+			}
+			liveBuild = build;
+			liveEditBaseEnvelope = build.snapshot;
+			setCalculatorState(build.snapshot.state);
+			if (workspaceMode === 'live-edit') {
+				recordLiveSync(
+					build,
+					build.snapshot.state,
+					build.snapshot.state,
+					localBuildId
+				);
+			}
+			liveSyncState = 'synced';
+		} catch (error) {
+			if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
+			if (
+				workspaceMode === 'live-edit' &&
+				error instanceof LiveBuildApiError &&
+				(error.code === 'forbidden' || error.code === 'not_found' || error.code === 'expired')
+			) {
+				detachRevokedLiveShare(
+					'This live share is no longer writable. Your local draft was kept unchanged.'
+				);
+				return;
+			}
+			handleLiveError(error, 'Could not refresh the shared build.');
+		}
+	}
+
+	function handleLiveRevision(revision: number, editGenerationChanged = false) {
+		if (!liveBuild || (!editGenerationChanged && revision === liveBuild.revision)) return;
+		void refreshLiveBuild();
+	}
+
+	function handleLiveUnavailable() {
+		if (workspaceMode === 'live-edit') {
+			void refreshLiveBuild();
+			return;
+		}
+		liveBuild = null;
+		liveEditBaseEnvelope = null;
+		setCalculatorState(createDefaultState());
+		liveSyncState = 'error';
+		sharingError = 'Shared build unavailable. It may have expired or sharing was stopped.';
+	}
+
+	function detachRevokedLiveShare(message: string) {
+		const localBuildId = liveLocalBuildId;
+		invalidateLiveConnection();
+		if (localBuildId && localLibrary.builds.some((build) => build.id === localBuildId)) {
+			persistLocalLibrary(updateLocalBuildLiveShare(localLibrary, localBuildId, undefined));
+		}
+		workspaceMode = 'device';
+		liveBuild = null;
+		liveEditBaseEnvelope = null;
+		liveSlug = '';
+		liveLocalBuildId = null;
+		currentEditSecret = null;
+		clearLiveConflict();
+		sharingError = null;
+		liveSyncState = 'idle';
+		replaceCurrentHash();
+		showWorkbenchApplyNotice(message);
+	}
+
+	function handleLiveError(error: unknown, fallback: string) {
+		sharingError = error instanceof Error ? error.message : fallback;
+		liveSyncState = navigator.onLine ? 'error' : 'offline';
+	}
+
+	async function pinCurrentLiveShare(pinned: boolean) {
+		if (!liveSlug) return;
+		const generation = liveConnectionGeneration;
+		const slug = liveSlug;
+		const { build } = await setLiveBuildPinned(db, slug, pinned);
+		if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
+		liveBuild = build;
+	}
+
+	async function rotateCurrentEditLink() {
+		if (!liveSlug || liveLinkRotationInProgress) return;
+		await saveLiveBuildNow();
+		if (!liveSlug || workspaceMode !== 'live-edit') return;
+		liveLinkRotationInProgress = true;
+		const generation = ++liveConnectionGeneration;
+		const slug = liveSlug;
+		const localBuildId = liveLocalBuildId;
+		try {
+			const response = await rotateLiveBuildEditLink(db, slug);
+			if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
+			// Invalidate any refresh or save that started while the rotation request was in flight.
+			liveConnectionGeneration += 1;
+			liveBuild = response.build;
+			liveEditBaseEnvelope = response.build.snapshot;
+			currentEditSecret = response.editSecret;
+			if (localBuildId) {
+				persistLocalLibrary(updateLocalBuildLiveShare(localLibrary, localBuildId, {
+					publicSlug: slug,
+					editSecret: response.editSecret,
+					revision: response.build.revision,
+					lastSyncedState: response.build.snapshot.state
+				}));
+			}
+		} finally {
+			liveLinkRotationInProgress = false;
+			if (workspaceMode === 'live-edit' && (liveSaveRequested || hasUnsavedLiveChanges())) {
+				void saveLiveBuildNow();
+			}
+		}
+	}
+
+	async function stopCurrentLiveShare() {
+		if (!liveSlug) return;
+		const generation = liveConnectionGeneration;
+		const slug = liveSlug;
+		const localBuildId = liveLocalBuildId;
+		await stopLiveBuild(db, slug);
+		if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
+		if (localBuildId) {
+			persistLocalLibrary(updateLocalBuildLiveShare(localLibrary, localBuildId, undefined));
+		}
+		liveBuild = null;
+		liveEditBaseEnvelope = null;
+		invalidateLiveConnection();
+		liveSlug = '';
+		currentEditSecret = null;
+		liveLocalBuildId = null;
+		workspaceMode = 'device';
+		clearLiveConflict();
+		liveSyncState = 'idle';
+		showWorkbenchApplyNotice('Sharing stopped. Draft kept on this device.');
+		replaceCurrentHash();
+	}
+
+	function openLocalBuild(buildId: string, clearLocation = true) {
+		invalidateLiveConnection();
+		const nextLibrary = setActiveLocalBuild(localLibrary, buildId);
+		persistLocalLibrary(nextLibrary);
+		const build = getActiveLocalBuild(nextLibrary);
+		workspaceMode = 'device';
+		liveBuild = null;
+		liveEditBaseEnvelope = null;
+		liveSlug = '';
+		liveLocalBuildId = null;
+		currentEditSecret = null;
+		snapshotEnvelope = null;
+		snapshotCompatibility = null;
+		snapshotInputsLoaded = false;
+		snapshotUrl = null;
+		sharingError = null;
+		clearLiveConflict();
+		liveSyncState = 'idle';
+		setCalculatorState(build.state);
+		if (clearLocation) replaceCurrentHash();
+		if (build.liveShare) void connectActiveLiveShare();
+	}
+
+	function createDeviceBuild(name: string) {
+		const nextLibrary = addLocalBuild(localLibrary, { name });
+		persistLocalLibrary(nextLibrary);
+		openLocalBuild(nextLibrary.activeBuildId);
+	}
+
+	function renameDeviceBuild(buildId: string, name: string) {
+		persistLocalLibrary(renameLocalBuild(localLibrary, buildId, name));
+	}
+
+	function duplicateDeviceBuild(buildId: string) {
+		const nextLibrary = duplicateLocalBuild(localLibrary, buildId);
+		persistLocalLibrary(nextLibrary);
+		openLocalBuild(nextLibrary.activeBuildId);
+	}
+
+	function deleteDeviceBuild(buildId: string) {
+		const wasCurrent = buildId === localLibrary.activeBuildId;
+		const nextLibrary = deleteLocalBuild(localLibrary, buildId);
+		persistLocalLibrary(nextLibrary);
+		if (wasCurrent) openLocalBuild(nextLibrary.activeBuildId);
+	}
+
+	function resetDeviceBuild(buildId: string) {
+		const nextLibrary = resetLocalBuild(localLibrary, buildId);
+		persistLocalLibrary(nextLibrary);
+		if (buildId === nextLibrary.activeBuildId) setCalculatorState(getActiveLocalBuild(nextLibrary).state);
+	}
+
+	function forkCurrentToDrafts() {
+		const nextLibrary = addLocalBuild(localLibrary, {
+			name: `${displayedBuildTitle} copy`,
+			state: calculator
+		});
+		persistLocalLibrary(nextLibrary);
+		openLocalBuild(nextLibrary.activeBuildId);
+		buildsSharingOpen = true;
+		showWorkbenchApplyNotice('Forked to this device.');
+	}
+
+	function openMyDrafts() {
+		openLocalBuild(localLibrary.activeBuildId);
+		buildsSharingOpen = true;
+	}
+
+	function loadSharedConflictVersion() {
+		if (!conflictRemoteBuild) return;
+		liveBuild = conflictRemoteBuild;
+		liveEditBaseEnvelope = conflictRemoteBuild.snapshot;
+		setCalculatorState(conflictRemoteBuild.snapshot.state);
+		recordLiveSync(conflictRemoteBuild, conflictRemoteBuild.snapshot.state);
+		clearLiveConflict();
+		sharingError = null;
+		liveSyncState = 'synced';
+	}
+
+	function acknowledgeRecoveryPhrase() {
+		window.localStorage.setItem(RECOVERY_ACK_KEY, 'acknowledged');
+		recoveryPhrase = null;
+		recoveryDialogOpen = false;
+	}
+
+	async function restoreLiveShareIdentity(phrase: string) {
+		await jazzAuth.auth.login(RecoveryPhrase.toSecret(phrase));
+		recoveryPhrase = null;
+		sharingError = null;
+		if (activeLocalBuild.liveShare) await connectActiveLiveShare();
+	}
+
+	async function retrySharing() {
+		if (liveConflict) return;
+		if (workspaceMode === 'live-edit' && liveBuild) {
+			await saveLiveBuildNow();
+			return;
+		}
+		if (liveSlug && workspaceMode === 'live-view') {
+			await openLiveBuildLink(liveSlug, locationGeneration);
+			return;
+		}
+		if (activeLocalBuild.liveShare) await connectActiveLiveShare();
+	}
+
+	async function retryPersistence() {
+		if (storageError) {
+			retryLocalSave();
+			return;
+		}
+		await retrySharing();
+	}
+
+	function handleOnline() {
+		if (workspaceMode === 'live-edit' || workspaceMode === 'live-view') void retrySharing();
+	}
+
+	function handleOffline() {
+		if (workspaceMode === 'live-edit') liveSyncState = 'offline';
+	}
+
+	function handleVisibilityChange() {
+		if (document.visibilityState === 'hidden' && workspaceMode === 'live-edit') {
+			void saveLiveBuildNow();
+		}
+	}
+
+	function safeFilename(name: string) {
+		return name.trim().replace(/[^a-z0-9._-]+/giu, '-').replace(/^-+|-+$/gu, '') || 'latale-build';
+	}
+
+	function downloadJson(filename: string, value: string) {
+		const url = URL.createObjectURL(new Blob([value], { type: 'application/json' }));
+		const link = document.createElement('a');
+		link.href = url;
+		link.download = filename;
+		link.click();
+		window.setTimeout(() => URL.revokeObjectURL(url), 0);
+	}
+
+	function exportCurrentBuild() {
+		downloadJson(`${safeFilename(displayedBuildTitle)}.json`, serializeState(calculator));
+	}
+
+	function exportBuildLibrary() {
+		downloadJson('latale-build-library.json', serializeLocalBuildBackup(localLibrary));
+	}
+
+	function requestBackupImport() {
+		backupInput?.click();
+	}
+
+	async function importBackupFile(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		const text = await file.text();
+		try {
+			const merged = mergeLocalBuildBackup(localLibrary, text);
+			persistLocalLibrary(merged.library);
+			showWorkbenchApplyNotice(`${merged.importedCount} ${merged.importedCount === 1 ? 'draft' : 'drafts'} imported.`);
+			return;
+		} catch {
+			try {
+				const state = parseLegacyCalculatorStateBackup(text);
+				const nextLibrary = addLocalBuild(localLibrary, {
+					name: file.name.replace(/\.json$/iu, ''),
+					state
+				});
+				persistLocalLibrary(nextLibrary);
+				openLocalBuild(nextLibrary.activeBuildId);
+				showWorkbenchApplyNotice('Build backup imported.');
+				return;
+			} catch {
+				storageError = 'This file is not a valid build or build-library backup.';
+			}
+		}
 	}
 
 	function applyScreenshotImportResult(nextStats: UiStats, notice: string) {
@@ -418,7 +1425,10 @@
 		fragmentParams.delete(LT_GEAR_FRAGMENT_PARAM);
 		const cleanUrl = new URL(window.location.href);
 		cleanUrl.hash = fragmentParams.toString();
-		replaceState(cleanUrl, window.history.state ?? {});
+		replaceState(
+			resolve(`/${cleanUrl.search}${cleanUrl.hash}` as '/'),
+			window.history.state ?? {}
+		);
 
 		if (!payload) {
 			showWorkbenchApplyNotice('Gear comparison link could not be imported.');
@@ -571,6 +1581,7 @@
 
 	function blurStatInput() {
 		focusedStatInput = '';
+		if (workspaceMode === 'live-edit') void saveLiveBuildNow();
 	}
 
 	function clearStatValue(stats: UiStats, panelId: WorkbenchPanelId, key: StatKey, index: 0 | 1) {
@@ -797,15 +1808,156 @@
 	}
 </script>
 
+<svelte:window ononline={handleOnline} onoffline={handleOffline} />
+<svelte:document onvisibilitychange={handleVisibilityChange} />
+
 <svelte:head>
 	<title>LaTale Damage Calculator</title>
 	<meta
 		name="description"
 		content="Personal LaTale damage calculator for stat, buff, and equivalence comparisons."
 	/>
+	{#if workspaceMode !== 'device'}
+		<meta name="robots" content="noindex,nofollow" />
+	{/if}
 </svelte:head>
 
-<main class="adventure-shell min-h-dvh text-foreground">
+{#if liveSlug && jazzAuth.configured}
+	{#key liveSlug}
+		<LiveBuildSubscription
+			slug={liveSlug}
+			onRevision={handleLiveRevision}
+			onUnavailable={handleLiveUnavailable}
+			onError={(error) => handleLiveError(error, 'The live connection was interrupted.')}
+		/>
+	{/key}
+{/if}
+
+<input
+	bind:this={backupInput}
+	type="file"
+	accept="application/json,.json"
+	hidden
+	aria-label="Import build backup"
+	onchange={importBackupFile}
+/>
+
+{#if storageError && !storageErrorDismissed && !readOnlyWorkspace}
+	<div class="fixed inset-x-4 top-4 z-50 mx-auto max-w-xl">
+		<Alert.Root variant="destructive" class="shadow-lg">
+			<AlertTriangleIcon />
+			<Alert.Title>Changes are not being saved on this device</Alert.Title>
+			<Alert.Description>{storageError}</Alert.Description>
+			<div class="col-span-full mt-3 flex flex-wrap gap-2">
+				<Button size="sm" variant="outline" onclick={retryLocalSave}>Retry save</Button>
+				<Button size="sm" variant="outline" onclick={exportBuildLibrary}>Export backup</Button>
+				<Button size="sm" variant="ghost" onclick={() => (storageErrorDismissed = true)}>Dismiss</Button>
+			</div>
+		</Alert.Root>
+	</div>
+{/if}
+
+{#if sharingError && readOnlyWorkspace && !snapshotNeedsFrozenResults}
+	<div class="fixed inset-x-4 top-4 z-50 mx-auto max-w-xl">
+		<Alert.Root variant={sharedWorkspaceReady ? 'default' : 'destructive'} class="shadow-lg">
+			<AlertTriangleIcon />
+			<Alert.Title>{sharedWorkspaceReady ? 'Shared build notice' : 'Shared build unavailable'}</Alert.Title>
+			<Alert.Description>{sharingError}</Alert.Description>
+			<div class="col-span-full mt-3 flex flex-wrap gap-2">
+				{#if liveSlug && !liveBuild}
+					<Button size="sm" variant="outline" onclick={retrySharing}>Retry</Button>
+				{/if}
+				<Button size="sm" onclick={openMyDrafts}>Open my drafts</Button>
+			</div>
+		</Alert.Root>
+	</div>
+{/if}
+
+{#if snapshotNeedsFrozenResults && snapshotFrozenSummary && snapshotEnvelope}
+	<section
+		class={`relative z-40 mx-auto w-full max-w-4xl px-4 ${snapshotFrozenOnly ? 'flex min-h-dvh items-center py-12' : 'pt-6'}`}
+		aria-labelledby="frozen-snapshot-title"
+	>
+		<Card.Root class="w-full shadow-xl">
+			<Card.Header>
+				<div>
+					<p class="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+						Author's frozen snapshot
+					</p>
+					<Card.Title id="frozen-snapshot-title" class="mt-1 text-xl">
+						{snapshotEnvelope.title}
+					</Card.Title>
+					<Card.Description class="mt-1">
+						{snapshotFrozenSummary.target.label} · saved {new Date(snapshotEnvelope.createdAt).toLocaleString()}
+					</Card.Description>
+				</div>
+				<Card.Action><Badge variant="secondary">Frozen results</Badge></Card.Action>
+			</Card.Header>
+			<Card.Content class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+				{#each [
+					['Base', snapshotFrozenSummary.results.base.avg],
+					['With buffs', snapshotFrozenSummary.results.buffed.avg],
+					['Change A + buffs', snapshotFrozenSummary.results.buffedA.avg],
+					['Change B + buffs', snapshotFrozenSummary.results.buffedB.avg]
+				] as result (result[0])}
+					<div class="rounded-xl border bg-muted/30 p-3">
+						<p class="text-xs text-muted-foreground">{result[0]}</p>
+						<p class="mt-1 text-lg font-semibold tabular-nums">{result[1]}</p>
+					</div>
+				{/each}
+			</Card.Content>
+			{#if snapshotCompatibility?.warnings.length}
+				<p class="px-6 text-sm text-muted-foreground">
+					{snapshotCompatibility.warnings.join(' ')}
+				</p>
+			{/if}
+			<Card.Footer class="flex-wrap gap-2">
+				{#if snapshotInputsLoaded}
+					<Button variant="outline" onclick={() => scrollToSection('calculator-workspace')}>
+						View inputs recalculated today
+					</Button>
+				{/if}
+				<Button onclick={openMyDrafts}>Open my drafts</Button>
+			</Card.Footer>
+		</Card.Root>
+	</section>
+{/if}
+
+{#if workspaceMode !== 'device' && sharedWorkspaceReady}
+	<div class="fixed inset-x-3 bottom-3 z-50 mx-auto flex w-fit max-w-[calc(100vw-1.5rem)] flex-wrap items-center justify-center gap-2 rounded-xl border bg-popover/95 p-2.5 text-popover-foreground shadow-xl backdrop-blur">
+		<Badge variant={workspaceMode === 'live-edit' ? 'secondary' : 'outline'}>
+			{sharingStatus.label}
+		</Badge>
+		<span class="max-w-64 truncate text-sm font-medium">{displayedBuildTitle}</span>
+		{#if canForkSharedWorkspace}
+			<Button size="sm" onclick={forkCurrentToDrafts}>
+				<GitForkIcon data-icon="inline-start" />
+				Fork to my drafts
+			</Button>
+		{/if}
+		<Button size="sm" variant="outline" onclick={openMyDrafts}>Open my drafts</Button>
+		{#if workspaceMode === 'live-edit'}
+			<Button size="sm" variant="ghost" onclick={() => (buildsSharingOpen = true)}>Share controls</Button>
+		{/if}
+	</div>
+{/if}
+
+{#if liveConflict}
+	<div class="fixed inset-x-4 top-4 z-50 mx-auto max-w-xl">
+		<Alert.Root variant="destructive" class="shadow-lg">
+			<AlertTriangleIcon />
+			<Alert.Title>These edits conflict with another editor</Alert.Title>
+			<Alert.Description>{sharingError}</Alert.Description>
+			<div class="col-span-full mt-3 flex flex-wrap gap-2">
+				<Button size="sm" variant="outline" onclick={loadSharedConflictVersion}>Load shared version</Button>
+				<Button size="sm" onclick={forkCurrentToDrafts}>Fork my edits</Button>
+			</div>
+		</Alert.Root>
+	</div>
+{/if}
+
+{#if !snapshotFrozenOnly}
+<main id="calculator-workspace" class="adventure-shell min-h-dvh text-foreground" inert={readOnlyWorkspace}>
 	<ClassArtRail
 		art={selectedClassArt}
 		selectedPreset={selectedClassPreset}
@@ -824,6 +1976,8 @@
 						<div class="brand-kicker">Adventurer's field guide</div>
 						<h1 class="brand-title mt-1 truncate text-lg sm:text-xl">LaTale Damage Calculator</h1>
 						<div class="brand-meta mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+							<span class="max-w-48 truncate font-medium text-foreground">{displayedBuildTitle}</span>
+							<span>{sharingStatus.label}</span>
 							<span>{TARGETS[report.settings.target].label}</span>
 							<span>Boss {formatPercent(report.settings.bossWeight)}</span>
 							<span>Buffs {activeBuffCount}</span>
@@ -887,14 +2041,14 @@
 										{...props}
 										variant="outline"
 										size="icon"
-										aria-label="Import and export"
-										onclick={() => (transferOpen = true)}
+										aria-label="Builds and sharing"
+										onclick={() => (buildsSharingOpen = true)}
 									>
 										<DatabaseIcon />
 									</Button>
 								{/snippet}
 							</Tooltip.Trigger>
-							<Tooltip.Content side="bottom" sideOffset={6}>Import / Export</Tooltip.Content>
+							<Tooltip.Content side="bottom" sideOffset={6}>Builds &amp; sharing</Tooltip.Content>
 						</Tooltip.Root>
 						<Tooltip.Root>
 							<Tooltip.Trigger>
@@ -1415,6 +2569,7 @@
 	</section>
 	</div>
 </main>
+{/if}
 
 <Sheet.Root bind:open={buffsOpen}>
 	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,54rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
@@ -1613,34 +2768,55 @@
 	</Sheet.Content>
 </Sheet.Root>
 
-<Sheet.Root bind:open={transferOpen}>
-	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,36rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
-		<Sheet.Header class="fantasy-sheet-header border-b border-border/80 px-5 py-4">
-			<Sheet.Title>Import / Export</Sheet.Title>
-		</Sheet.Header>
+<BuildsSharingSheet
+	bind:open={buildsSharingOpen}
+	bind:recoveryDialogOpen
+	builds={buildSummaries}
+	activeBuildId={localLibrary.activeBuildId}
+	mode={workspaceMode}
+	liveShare={liveShareSummary}
+	{snapshotUrl}
+	{recoveryPhrase}
+	status={sharingStatus}
+	error={sharingError ?? storageError}
+	onSelectBuild={openLocalBuild}
+	onCreateBuild={createDeviceBuild}
+	onRenameBuild={renameDeviceBuild}
+	onDuplicateBuild={duplicateDeviceBuild}
+	onDeleteBuild={deleteDeviceBuild}
+	onResetBuild={resetDeviceBuild}
+	onCreateSnapshot={createSnapshotLink}
+	onCreateLiveShare={readOnlyWorkspace ? undefined : createCurrentLiveShare}
+	onPinLiveShare={pinCurrentLiveShare}
+	onRotateEditLink={rotateCurrentEditLink}
+	onStopLiveShare={stopCurrentLiveShare}
+	onExportCurrent={exportCurrentBuild}
+	onExportLibrary={exportBuildLibrary}
+	onImportBackup={requestBackupImport}
+	onRestoreIdentity={restoreLiveShareIdentity}
+	onAcknowledgeRecoveryPhrase={acknowledgeRecoveryPhrase}
+	onForkToDrafts={forkCurrentToDrafts}
+	onOpenDrafts={openMyDrafts}
+	onRetry={retryPersistence}
+/>
 
-		<div class="space-y-3 p-5">
-			<Textarea bind:value={transferText} class="min-h-72 font-mono text-xs" />
-			<div class="flex flex-wrap gap-2">
-				<Button onclick={exportData}>
-					<DownloadIcon data-icon="inline-start" />
-					Export
-				</Button>
-				<Button variant="outline" onclick={importData}>
-					<UploadIcon data-icon="inline-start" />
-					Import
-				</Button>
-				<Button variant="secondary" onclick={copyTransfer}>
-					<ClipboardCopyIcon data-icon="inline-start" />
-					Copy
-				</Button>
-			</div>
-			{#if transferStatus}
-				<p class="text-sm text-muted-foreground">{transferStatus}</p>
-			{/if}
-		</div>
-	</Sheet.Content>
-</Sheet.Root>
+<AlertDialog.Root bind:open={editLinkConfirmOpen} onOpenChange={handleEditLinkDialogChange}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Edit shared build?</AlertDialog.Title>
+			<AlertDialog.Description>
+				Changes will sync to everyone using this live build. You can fork an independent device
+				copy at any time.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel onclick={declineEditLink}>View only</AlertDialog.Cancel>
+			<Button disabled={liveSyncState === 'syncing'} onclick={acceptEditLink}>
+				{liveSyncState === 'syncing' ? 'Opening…' : 'Open for editing'}
+			</Button>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
 
 {#snippet statInput(panelId: string, toneId: WorkbenchPanelId, stats: UiStats, key: StatKey, index: 0 | 1)}
 	{@const inputId = statInputId(panelId, key, index)}

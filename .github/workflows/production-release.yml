@@ -1,0 +1,105 @@
+name: Production release
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment:
+      name: Production
+    steps:
+      - name: Verify required release secrets
+        shell: bash
+        env:
+          JAZZ_PRODUCTION_APP_ID: ${{ secrets.JAZZ_PRODUCTION_APP_ID }}
+          JAZZ_PRODUCTION_SERVER_URL: ${{ secrets.JAZZ_PRODUCTION_SERVER_URL }}
+          JAZZ_PRODUCTION_ADMIN_SECRET: ${{ secrets.JAZZ_PRODUCTION_ADMIN_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          missing=0
+          for variable in \
+            JAZZ_PRODUCTION_APP_ID \
+            JAZZ_PRODUCTION_SERVER_URL \
+            JAZZ_PRODUCTION_ADMIN_SECRET \
+            VERCEL_TOKEN \
+            VERCEL_ORG_ID \
+            VERCEL_PROJECT_ID
+          do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "::error::Missing production environment secret: ${variable}"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Checkout selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Jazz schema
+        run: npm run jazz:validate
+
+      - name: Check
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@58.7.1
+
+      - name: Pull production Vercel settings
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      - name: Build production artifact
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+
+      - name: Publish production Jazz schema and permissions
+        env:
+          PUBLIC_JAZZ_APP_ID: ${{ secrets.JAZZ_PRODUCTION_APP_ID }}
+          PUBLIC_JAZZ_SERVER_URL: ${{ secrets.JAZZ_PRODUCTION_SERVER_URL }}
+          JAZZ_ADMIN_SECRET: ${{ secrets.JAZZ_PRODUCTION_ADMIN_SECRET }}
+        run: |
+          npx --no-install jazz-tools deploy "$PUBLIC_JAZZ_APP_ID" \
+            --schema-dir src/lib \
+            --server-url "$PUBLIC_JAZZ_SERVER_URL" \
+            --admin-secret "$JAZZ_ADMIN_SECRET"
+
+      - name: Deploy verified artifact to Vercel Production
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
