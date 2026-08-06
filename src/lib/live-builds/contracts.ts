@@ -48,6 +48,10 @@ export type LiveBuildResponse = {
 	build: LiveBuildResource;
 };
 
+export type ListLiveBuildsResponse = {
+	builds: LiveBuildResource[];
+};
+
 export type RedeemLiveBuildEditRequest = {
 	editSecret: string;
 };

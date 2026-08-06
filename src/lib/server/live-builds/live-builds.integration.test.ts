@@ -18,6 +18,7 @@ import {
 	createLiveBuild,
 	deleteLiveBuild,
 	getLiveBuild,
+	listLiveBuilds,
 	patchLiveBuild,
 	pinLiveBuild,
 	redeemLiveBuildEdit,
@@ -63,6 +64,57 @@ afterAll(async () => {
 }, 20_000);
 
 describe('Jazz-backed live build lifecycle', () => {
+	it('recovers creator-owned builds without exposing editor access or internal fields', async () => {
+		const creator = actor(17);
+		const editor = actor(18);
+		const snapshot = createSnapshotEnvelope({
+			title: 'Recoverable setup',
+			state: createDefaultState()
+		});
+		const created = await createLiveBuild(
+			creator,
+			{ title: 'Recoverable setup', snapshot },
+			ORIGIN
+		);
+
+		await expect(
+			redeemLiveBuildEdit(created.build.publicSlug, editor, {
+				editSecret: created.editSecret
+			})
+		).resolves.toMatchObject({ role: 'editor' });
+		await expect(listLiveBuilds(editor)).resolves.toEqual({ builds: [] });
+
+		const recovered = await listLiveBuilds(creator);
+		expect(recovered.builds).toHaveLength(1);
+		expect(recovered.builds[0]).toMatchObject({
+			publicSlug: created.build.publicSlug,
+			title: 'Recoverable setup',
+			role: 'creator'
+		});
+		expect(Object.keys(recovered.builds[0]).sort()).toEqual([
+			'expiresAt',
+			'formulaRevision',
+			'lastEditedAt',
+			'pinned',
+			'publicSlug',
+			'revision',
+			'role',
+			'snapshot',
+			'stateVersion',
+			'title'
+		]);
+
+		const attackBefore = recovered.builds[0].snapshot.state.stats.attack[0];
+		const patched = await patchLiveBuild(created.build.publicSlug, creator, {
+			baseRevision: recovered.builds[0].revision,
+			changes: [{ path: '/state/stats/attack/0', before: attackBefore, after: '54321' }]
+		});
+		expect(patched).toMatchObject({ revision: 2, role: 'creator' });
+		expect(patched.snapshot.state.stats.attack[0]).toBe('54321');
+
+		await deleteLiveBuild(created.build.publicSlug, creator);
+	}, 40_000);
+
 	it('creates, grants, patches, rotates, pins and stops a live build', async () => {
 		const creator = actor(13);
 		const editor = actor(14);

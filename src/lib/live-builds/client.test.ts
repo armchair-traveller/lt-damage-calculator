@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { buildLiveBuildChanges } from './client.js';
-import type { SnapshotEnvelopeV1 } from './contracts.js';
+import type { Db } from 'jazz-tools';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buildLiveBuildChanges, listLiveBuilds } from './client.js';
+import { LIVE_BUILD_IDENTITY_AUDIENCE, type SnapshotEnvelopeV1 } from './contracts.js';
 import { createDefaultState } from '$lib/calculator/model.js';
 
 function envelope(): SnapshotEnvelopeV1 {
@@ -13,6 +14,36 @@ function envelope(): SnapshotEnvelopeV1 {
 		state: createDefaultState()
 	};
 }
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
+
+describe('listLiveBuilds', () => {
+	it('authenticates an owned-build list request with the current Jazz identity', async () => {
+		const getLocalFirstIdentityProof = vi.fn(() => 'identity-proof');
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _options?: RequestInit) =>
+			new Response(JSON.stringify({ builds: [] }), {
+				status: 200,
+				headers: { 'content-type': 'application/json' }
+			})
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		await expect(
+			listLiveBuilds({ getLocalFirstIdentityProof } as unknown as Db)
+		).resolves.toEqual({ builds: [] });
+		expect(getLocalFirstIdentityProof).toHaveBeenCalledWith({
+			ttlSeconds: 60,
+			audience: LIVE_BUILD_IDENTITY_AUDIENCE
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const [path, options] = fetchMock.mock.calls[0]!;
+		expect(path).toBe('/api/live-builds');
+		expect(options?.method).toBeUndefined();
+		expect(new Headers(options?.headers).get('authorization')).toBe('Bearer identity-proof');
+	});
+});
 
 describe('buildLiveBuildChanges', () => {
 	it('emits leaf changes for independent calculator fields', () => {

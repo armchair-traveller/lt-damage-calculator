@@ -4,6 +4,7 @@ import type {
 	CreateLiveBuildRequest,
 	CreateLiveBuildResponse,
 	JsonValue,
+	ListLiveBuildsResponse,
 	LiveBuildApiErrorCode,
 	LiveBuildApiErrorResponse,
 	LiveBuildPatchChange,
@@ -71,6 +72,10 @@ async function apiRequest<T>(
 
 export function fetchLiveBuild(slug: string, db?: Db): Promise<LiveBuildResponse> {
 	return apiRequest(`/api/live-builds/${encodeURIComponent(slug)}`, {}, db);
+}
+
+export function listLiveBuilds(db: Db): Promise<ListLiveBuildsResponse> {
+	return apiRequest('/api/live-builds', {}, db);
 }
 
 export function createLiveBuild(

@@ -11,6 +11,7 @@
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import GitForkIcon from '@lucide/svelte/icons/git-fork';
+	import LaptopIcon from '@lucide/svelte/icons/laptop';
 	import LinkIcon from '@lucide/svelte/icons/link';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PinIcon from '@lucide/svelte/icons/pin';
@@ -46,7 +47,8 @@
 		BuildsSharingStatusKind,
 		BuildsSharingTab,
 		BuildSummary,
-		LiveShareSummary
+		LiveShareSummary,
+		RecoveredLiveShareSummary
 	} from './builds-sharing.js';
 
 	type CopyTarget = 'snapshot' | 'view' | 'edit' | 'recovery';
@@ -64,6 +66,9 @@
 		liveShare = null,
 		snapshotUrl = null,
 		recoveryPhrase = null,
+		recoveredLiveShares = [],
+		recoveredLiveSharesStatus = 'idle',
+		recoveredLiveSharesError = null,
 		status = null,
 		pendingAction = null,
 		error = null,
@@ -81,6 +86,9 @@
 		onExportCurrent,
 		onExportLibrary,
 		onImportBackup,
+		onRefreshRecoveredLiveShares,
+		onAttachRecoveredLiveShare,
+		onRevealRecoveryPhrase,
 		onRestoreIdentity,
 		onAcknowledgeRecoveryPhrase,
 		onForkToDrafts,
@@ -104,6 +112,7 @@
 	let copiedTarget: CopyTarget | null = $state(null);
 	let confirmation: Confirmation | null = $state(null);
 	let confirmationOpen = $state(false);
+	let attachingRecoveredSlug: string | null = $state(null);
 
 	const currentAction = $derived(pendingAction ?? localPendingAction);
 	const displayedSnapshotUrl = $derived(snapshotUrl);
@@ -175,7 +184,7 @@
 		} catch (actionError) {
 			localError =
 				actionError instanceof Error ? actionError.message : 'That action could not be completed.';
-		return undefined;
+			return undefined;
 		} finally {
 			localPendingAction = null;
 		}
@@ -220,6 +229,23 @@
 			restorePhrase = '';
 			restoreAttempted = false;
 		}
+	}
+
+	async function refreshRecoveredLiveShares() {
+		await runAction('refresh-recovered-shares', onRefreshRecoveredLiveShares);
+	}
+
+	async function attachRecoveredLiveShare(share: RecoveredLiveShareSummary) {
+		attachingRecoveredSlug = share.publicSlug;
+		await runAction('attach-recovered-share', () =>
+			onAttachRecoveredLiveShare?.(share.publicSlug)
+		);
+		if (!localError) activeTab = 'share';
+		attachingRecoveredSlug = null;
+	}
+
+	async function revealRecoveryPhrase() {
+		await runAction('reveal-recovery', onRevealRecoveryPhrase);
 	}
 
 	async function copyText(value: string, target: CopyTarget) {
@@ -295,6 +321,15 @@
 			};
 		}
 		if (current.kind === 'rotate') {
+			if (!current.share.editUrl) {
+				return {
+					title: 'Create a new edit link?',
+					description:
+						'This creates a secret editor link. Any older edit link and its editor access will stop working.',
+					action: 'Create edit link',
+					destructive: false
+				};
+			}
 			return {
 				title: 'Replace the edit link?',
 				description:
@@ -666,10 +701,10 @@
 												{liveShare.pinned ? 'Unpin' : 'Pin permanently'}
 											</Button>
 										{/if}
-										{#if onRotateEditLink && liveShare.editUrl}
+										{#if onRotateEditLink}
 											<Button variant="outline" size="sm" disabled={isAnyActionWorking()} onclick={() => openConfirmation({ kind: 'rotate', share: liveShare })}>
 												{#if isWorking('rotate-edit-link')}<Spinner data-icon="inline-start" />{:else}<RefreshCwIcon data-icon="inline-start" />{/if}
-												Replace edit link
+												{liveShare.editUrl ? 'Replace edit link' : 'Create edit link'}
 											</Button>
 										{/if}
 										{#if onStopLiveShare}
@@ -745,51 +780,145 @@
 							<Card.Header>
 								<Card.Title>Live-share recovery</Card.Title>
 								<Card.Description>
-									A recovery phrase restores control of live shares on another device. It does not restore device drafts.
+									Use one recovery phrase to find and reconnect the active live shares you created on any device.
 								</Card.Description>
 								<Card.Action><FileKeyIcon /></Card.Action>
 							</Card.Header>
-							{#if recoveryWords.length > 0}
-								<Card.Content>
-									<Alert.Root>
-										<ShieldCheckIcon />
-										<Alert.Title>Keep this phrase offline</Alert.Title>
-										<Alert.Description>
-											Anyone with it can manage your live shares. It is never included in build exports.
-										</Alert.Description>
-									</Alert.Root>
-								</Card.Content>
-								<Card.Footer>
-									<Button variant="outline" onclick={() => (recoveryDialogOpen = true)}>
-										<FileKeyIcon data-icon="inline-start" />
-										View recovery phrase
-									</Button>
-								</Card.Footer>
-							{:else if onRestoreIdentity}
-								<Card.Content>
+							<Card.Content class="flex flex-col gap-4">
+								<div class="flex flex-wrap items-start justify-between gap-3">
+									<div class="flex min-w-0 flex-col gap-1">
+										<h3 class="font-medium">Reconnect another device</h3>
+										<p class="text-muted-foreground text-sm">
+											Reveal this device’s phrase, then enter it on the other device.
+										</p>
+									</div>
+									{#if onRevealRecoveryPhrase || recoveryWords.length > 0}
+										<Button
+											variant="outline"
+											disabled={isAnyActionWorking()}
+											onclick={() => recoveryWords.length > 0 ? (recoveryDialogOpen = true) : revealRecoveryPhrase()}
+										>
+											{#if isWorking('reveal-recovery')}<Spinner data-icon="inline-start" />{:else}<FileKeyIcon data-icon="inline-start" />{/if}
+											{recoveryWords.length > 0 ? 'View phrase' : 'Show phrase'}
+										</Button>
+									{/if}
+								</div>
+
+								{#if onRestoreIdentity}
+									<Separator />
 									<form onsubmit={(event) => { event.preventDefault(); restoreIdentity(); }}>
 										<Field.Field data-invalid={restoreInvalid || undefined}>
-											<Field.Label for={`${componentId}-recovery-phrase`}>24-word recovery phrase</Field.Label>
+											<Field.Label for={`${componentId}-recovery-phrase`}>Recover shares on this device</Field.Label>
 											<Textarea
 												id={`${componentId}-recovery-phrase`}
 												rows={4}
-												placeholder="Enter the words separated by spaces"
+												placeholder="Enter the 24 words separated by spaces"
 												aria-invalid={restoreInvalid || undefined}
 												bind:value={restorePhrase}
 											/>
 											{#if restoreInvalid}
 												<Field.Error>Enter all 24 words. Found {restoreWordCount}.</Field.Error>
 											{:else}
-												<Field.Description>This replaces live-share control on this device.</Field.Description>
+												<Field.Description>
+													This switches the live-share identity on this device. Drafts stay here, but this device stops managing shares from its current identity. Save this device’s phrase first if you may need them.
+												</Field.Description>
 											{/if}
 											<Button type="submit" disabled={isAnyActionWorking()}>
 												{#if isWorking('restore-identity')}<Spinner data-icon="inline-start" />{:else}<FileKeyIcon data-icon="inline-start" />{/if}
-												Restore share controls
+												Restore and find shares
 											</Button>
 										</Field.Field>
 									</form>
-								</Card.Content>
-							{/if}
+								{/if}
+
+								{#if onRefreshRecoveredLiveShares || recoveredLiveSharesStatus !== 'idle'}
+									<Separator />
+									<div class="flex items-start justify-between gap-3">
+										<div class="flex min-w-0 flex-col gap-1">
+											<h3 class="font-medium">Shares created with this identity</h3>
+											<p class="text-muted-foreground text-sm">
+												Attach one to keep an editable draft on this device.
+											</p>
+										</div>
+										{#if onRefreshRecoveredLiveShares}
+											<Button
+												variant="outline"
+												size="icon-sm"
+												aria-label="Refresh active live shares"
+												title="Refresh active live shares"
+												disabled={isAnyActionWorking()}
+												onclick={refreshRecoveredLiveShares}
+											>
+												{#if isWorking('refresh-recovered-shares') || recoveredLiveSharesStatus === 'loading'}<Spinner />{:else}<RefreshCwIcon />{/if}
+											</Button>
+										{/if}
+									</div>
+
+									{#if recoveredLiveSharesStatus === 'loading' && recoveredLiveShares.length === 0}
+										<Empty.Root class="border">
+											<Empty.Header>
+												<Empty.Media variant="icon"><Spinner /></Empty.Media>
+												<Empty.Title>Finding active shares…</Empty.Title>
+											</Empty.Header>
+										</Empty.Root>
+									{:else if recoveredLiveSharesStatus === 'error' && recoveredLiveShares.length === 0}
+										<Alert.Root variant="destructive">
+											<AlertCircleIcon />
+											<Alert.Title>Couldn’t find your live shares</Alert.Title>
+											<Alert.Description>
+												{recoveredLiveSharesError ?? 'Try refreshing after the sharing service is available.'}
+											</Alert.Description>
+										</Alert.Root>
+									{:else if recoveredLiveSharesStatus === 'ready' && recoveredLiveShares.length === 0}
+										<Empty.Root class="border">
+											<Empty.Header>
+												<Empty.Media variant="icon"><CloudIcon /></Empty.Media>
+												<Empty.Title>No active live shares</Empty.Title>
+												<Empty.Description>
+													Expired and stopped shares are not listed; any device drafts remain. New live shares will appear here.
+												</Empty.Description>
+											</Empty.Header>
+										</Empty.Root>
+									{:else if recoveredLiveShares.length > 0}
+										{#if recoveredLiveSharesError}
+											<Alert.Root variant="destructive">
+												<AlertCircleIcon />
+												<Alert.Title>Refresh failed</Alert.Title>
+												<Alert.Description>{recoveredLiveSharesError}</Alert.Description>
+											</Alert.Root>
+										{/if}
+										<div class="flex flex-col gap-3">
+											{#each recoveredLiveShares as share (share.publicSlug)}
+												<Card.Root size="sm">
+													<Card.Header>
+														<Card.Title class="truncate">{share.title}</Card.Title>
+														<Card.Description>
+															Edited {formatTimestamp(share.lastEditedAt)} · revision {share.revision}
+															{#if !share.pinned && share.expiresAt}<br />Expires {formatTimestamp(share.expiresAt)}{/if}
+														</Card.Description>
+														<Card.Action>
+															<div class="flex flex-wrap justify-end gap-1">
+																{#if share.attached}<Badge variant="secondary">On this device</Badge>{/if}
+																{#if share.pinned}<Badge variant="outline">Pinned</Badge>{/if}
+															</div>
+														</Card.Action>
+													</Card.Header>
+													<Card.Footer>
+														<Button
+															size="sm"
+															disabled={!onAttachRecoveredLiveShare || isAnyActionWorking()}
+															onclick={() => attachRecoveredLiveShare(share)}
+														>
+															{#if isWorking('attach-recovered-share') && attachingRecoveredSlug === share.publicSlug}<Spinner data-icon="inline-start" />{:else}<LaptopIcon data-icon="inline-start" />{/if}
+															{share.attached ? 'Open device draft' : 'Attach to this device'}
+														</Button>
+													</Card.Footer>
+												</Card.Root>
+											{/each}
+										</div>
+									{/if}
+								{/if}
+							</Card.Content>
 						</Card.Root>
 					</div>
 				</Tabs.Content>
@@ -816,9 +945,9 @@
 <Dialog.Root bind:open={recoveryDialogOpen}>
 	<Dialog.Content class="sm:max-w-lg">
 		<Dialog.Header>
-			<Dialog.Title>Save your recovery phrase</Dialog.Title>
+			<Dialog.Title>Live-share recovery phrase</Dialog.Title>
 			<Dialog.Description>
-				This is the only way to regain control of live shares on a new device. It does not recover local drafts.
+				Enter these words on another device to discover and attach your active live shares. Device drafts are separate.
 			</Dialog.Description>
 		</Dialog.Header>
 		{#if recoveryWords.length > 0}

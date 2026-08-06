@@ -88,9 +88,12 @@
 	import LiveBuildSubscription from '$lib/components/live-build-subscription.svelte';
 	import type {
 		BuildsSharingMode,
+		BuildsSharingTab,
 		BuildsSharingStatus,
 		BuildSummary,
-		LiveShareSummary
+		LiveShareSummary,
+		RecoveredLiveShareSummary,
+		RecoveredLiveSharesStatus
 	} from '$lib/components/builds-sharing.js';
 	import ClassArtRail from '$lib/components/class-art-rail.svelte';
 	import ScreenshotImportSheet from '$lib/components/screenshot-import-sheet.svelte';
@@ -98,6 +101,7 @@
 	import { getJazzAuthContext } from '$lib/jazz-auth-context.js';
 	import {
 		addLocalBuild,
+		attachRecoveredLiveShare as attachRecoveredLiveShareToLibrary,
 		createLocalBuildLibrary,
 		deleteLocalBuild,
 		duplicateLocalBuild,
@@ -130,6 +134,7 @@
 		buildLiveBuildChanges,
 		createLiveBuild,
 		fetchLiveBuild,
+		listLiveBuilds,
 		LiveBuildApiError,
 		patchLiveBuild,
 		redeemLiveBuildEdit,
@@ -170,6 +175,7 @@
 
 	const ENEMY_TYPES: EnemyType[] = ['normal', 'boss'];
 	const RECOVERY_ACK_KEY = 'ltdc:jazz-recovery-ack:v1';
+	const RECOVERY_CONTINUATION_KEY = 'ltdc:jazz-recovery-continuation:v1';
 	const numberFormatter = new Intl.NumberFormat('en-US', {
 		maximumFractionDigits: 2
 	});
@@ -214,6 +220,7 @@
 	let equivalenceOpen = $state(false);
 	let auditOpen = $state(false);
 	let buildsSharingOpen = $state(false);
+	let buildsSharingTab = $state<BuildsSharingTab>('drafts');
 	let recoveryDialogOpen = $state(false);
 	let editLinkConfirmOpen = $state(false);
 	let screenshotImportOpen = $state(false);
@@ -231,6 +238,9 @@
 	let snapshotInputsLoaded = $state(false);
 	let snapshotUrl = $state<string | null>(null);
 	let recoveryPhrase = $state<string | null>(null);
+	let recoveredLiveBuilds = $state.raw<LiveBuildResource[]>([]);
+	let recoveredLiveSharesStatus = $state<RecoveredLiveSharesStatus>('idle');
+	let recoveredLiveSharesError = $state<string | null>(null);
 	let storageError = $state<string | null>(null);
 	let storageErrorDismissed = $state(false);
 	let sharingError = $state<string | null>(null);
@@ -303,6 +313,35 @@
 					? currentLiveBuild.expiresAt
 					: undefined
 		})) satisfies BuildSummary[];
+	});
+	const recoveredLiveShareSummaries = $derived.by(() => {
+		const currentCreatorBuild = liveBuild?.role === 'creator' ? liveBuild : null;
+		const discoveredBuilds = recoveredLiveBuilds.map((build) =>
+			currentCreatorBuild?.publicSlug === build.publicSlug ? currentCreatorBuild : build
+		);
+		if (
+			currentCreatorBuild &&
+			!discoveredBuilds.some((build) => build.publicSlug === currentCreatorBuild.publicSlug)
+		) {
+			discoveredBuilds.push(currentCreatorBuild);
+		}
+		return discoveredBuilds
+			.sort(
+				(left, right) =>
+					new Date(right.lastEditedAt).getTime() - new Date(left.lastEditedAt).getTime() ||
+					left.publicSlug.localeCompare(right.publicSlug)
+			)
+			.map((build) => ({
+				publicSlug: build.publicSlug,
+				title: build.title,
+				revision: build.revision,
+				pinned: build.pinned,
+				lastEditedAt: build.lastEditedAt,
+				expiresAt: build.expiresAt,
+				attached: localLibrary.builds.some(
+					(localBuild) => localBuild.liveShare?.publicSlug === build.publicSlug
+				)
+			})) satisfies RecoveredLiveShareSummary[];
 	});
 	const liveShareSummary = $derived.by((): LiveShareSummary | null => {
 		const slug = liveSlug || activeLocalBuild.liveShare?.publicSlug;
@@ -424,7 +463,13 @@
 	const pendingGearImport = $derived(pendingGearImports[0]);
 
 	onMount(() => {
+		if (window.sessionStorage.getItem(RECOVERY_CONTINUATION_KEY)) {
+			window.sessionStorage.removeItem(RECOVERY_CONTINUATION_KEY);
+			buildsSharingTab = 'backup';
+			buildsSharingOpen = true;
+		}
 		void initializeWorkspaceFromLocation();
+		if (jazzAuth.configured) void refreshRecoveredLiveShares();
 		const handleHashChange = () => void initializeWorkspaceFromLocation();
 		const handleStorage = (event: StorageEvent) => {
 			if (event.key !== LOCAL_BUILD_LIBRARY_KEY || !event.newValue || storageError) return;
@@ -683,6 +728,35 @@
 		return url.toString();
 	}
 
+	function rememberRecoveredLiveBuild(build: LiveBuildResource) {
+		if (build.role !== 'creator') return;
+		recoveredLiveBuilds = [
+			build,
+			...recoveredLiveBuilds.filter((candidate) => candidate.publicSlug !== build.publicSlug)
+		];
+	}
+
+	function forgetRecoveredLiveBuild(publicSlug: string) {
+		recoveredLiveBuilds = recoveredLiveBuilds.filter(
+			(build) => build.publicSlug !== publicSlug
+		);
+	}
+
+	async function refreshRecoveredLiveShares() {
+		if (!jazzAuth.configured) return;
+		recoveredLiveSharesStatus = 'loading';
+		recoveredLiveSharesError = null;
+		try {
+			const response = await listLiveBuilds(db);
+			recoveredLiveBuilds = response.builds;
+			recoveredLiveSharesStatus = 'ready';
+		} catch (error) {
+			recoveredLiveSharesStatus = 'error';
+			recoveredLiveSharesError =
+				error instanceof Error ? error.message : 'Could not find active live shares.';
+		}
+	}
+
 	function replaceCurrentHash(params?: URLSearchParams) {
 		const url = new URL(window.location.href);
 		url.hash = params?.toString() ?? '';
@@ -775,6 +849,7 @@
 			) return;
 			liveBuild = remote;
 			if (remote.role === 'viewer') {
+				forgetRecoveredLiveBuild(slug);
 				detachRevokedLiveShare(
 					'This device no longer has edit access. Your local draft was kept unchanged.'
 				);
@@ -807,6 +882,16 @@
 			liveSyncState = hasUnsavedLiveChanges() ? 'syncing' : 'synced';
 		} catch (error) {
 			if (generation !== liveConnectionGeneration) return;
+			if (
+				error instanceof LiveBuildApiError &&
+				(error.code === 'forbidden' || error.code === 'not_found' || error.code === 'expired')
+			) {
+				forgetRecoveredLiveBuild(slug);
+				detachRevokedLiveShare(
+					'This live share expired, was stopped, or is no longer owned by this identity. The device draft was kept.'
+				);
+				return;
+			}
 			workspaceMode = 'live-edit';
 			handleLiveError(error, 'Could not reconnect this live share. Your draft is still saved on this device.');
 		}
@@ -919,6 +1004,7 @@
 				await stopLiveBuild(db, response.build.publicSlug);
 				return;
 			}
+			rememberRecoveredLiveBuild(response.build);
 			persistLocalLibrary(updateLocalBuildLiveShare(localLibrary, localBuildId, {
 				publicSlug: response.build.publicSlug,
 				editSecret: response.editSecret,
@@ -1043,6 +1129,7 @@
 		localBuildId: string | null = liveLocalBuildId,
 		editSecret: string | null = currentEditSecret
 	) {
+		rememberRecoveredLiveBuild(build);
 		if (!localBuildId) return;
 		const localBuild = localLibrary.builds.find((candidate) => candidate.id === localBuildId);
 		if (!localBuild || localBuild.liveShare?.publicSlug !== build.publicSlug) return;
@@ -1156,6 +1243,7 @@
 		const { build } = await setLiveBuildPinned(db, slug, pinned);
 		if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
 		liveBuild = build;
+		rememberRecoveredLiveBuild(build);
 	}
 
 	async function rotateCurrentEditLink() {
@@ -1172,6 +1260,7 @@
 			// Invalidate any refresh or save that started while the rotation request was in flight.
 			liveConnectionGeneration += 1;
 			liveBuild = response.build;
+			rememberRecoveredLiveBuild(response.build);
 			liveEditBaseEnvelope = response.build.snapshot;
 			currentEditSecret = response.editSecret;
 			if (localBuildId) {
@@ -1197,6 +1286,7 @@
 		const localBuildId = liveLocalBuildId;
 		await stopLiveBuild(db, slug);
 		if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
+		forgetRecoveredLiveBuild(slug);
 		if (localBuildId) {
 			persistLocalLibrary(updateLocalBuildLiveShare(localLibrary, localBuildId, undefined));
 		}
@@ -1292,6 +1382,88 @@
 		liveSyncState = 'synced';
 	}
 
+	async function attachRecoveredLiveShareToDevice(publicSlug: string) {
+		if (workspaceMode === 'live-edit') await saveLiveBuildNow();
+
+		let recoveredBuild: LiveBuildResource;
+		try {
+			const response = await fetchLiveBuild(publicSlug, db);
+			recoveredBuild = response.build;
+		} catch (error) {
+			if (
+				error instanceof LiveBuildApiError &&
+				(error.code === 'expired' || error.code === 'not_found')
+			) {
+				forgetRecoveredLiveBuild(publicSlug);
+				recoveredLiveSharesStatus = 'ready';
+				throw new Error('This live share expired or was stopped before it could be attached.');
+			}
+			throw error;
+		}
+
+		if (recoveredBuild.role !== 'creator') {
+			forgetRecoveredLiveBuild(publicSlug);
+			throw new Error('This live-share identity no longer owns that share. Refresh the list and try again.');
+		}
+		rememberRecoveredLiveBuild(recoveredBuild);
+
+		const previousLibrary = localLibrary;
+		const attached = attachRecoveredLiveShareToLibrary(localLibrary, {
+			publicSlug: recoveredBuild.publicSlug,
+			name: recoveredBuild.title,
+			state: recoveredBuild.snapshot.state,
+			revision: recoveredBuild.revision
+		});
+		if (!attached.created) {
+			if (
+				workspaceMode !== 'live-edit' ||
+				liveLocalBuildId !== attached.buildId ||
+				liveSlug !== recoveredBuild.publicSlug
+			) {
+				openLocalBuild(attached.buildId);
+			}
+			buildsSharingOpen = true;
+			buildsSharingTab = 'share';
+			showWorkbenchApplyNotice('Opened the recovered share on this device.');
+			return;
+		}
+
+		if (!persistLocalLibrary(attached.library)) {
+			localLibrary = previousLibrary;
+			throw new Error(storageError ?? 'Could not attach this live share to the device library.');
+		}
+
+		invalidateLiveConnection();
+		workspaceMode = 'live-edit';
+		liveBuild = recoveredBuild;
+		liveEditBaseEnvelope = recoveredBuild.snapshot;
+		liveSlug = recoveredBuild.publicSlug;
+		liveLocalBuildId = attached.buildId;
+		currentEditSecret = null;
+		pendingEditSecret = '';
+		editLinkConfirmOpen = false;
+		snapshotEnvelope = null;
+		snapshotCompatibility = null;
+		snapshotInputsLoaded = false;
+		snapshotUrl = null;
+		sharingError = null;
+		clearLiveConflict();
+		setCalculatorState(recoveredBuild.snapshot.state);
+		liveSyncState = 'synced';
+		replaceCurrentHash();
+		buildsSharingOpen = true;
+		buildsSharingTab = 'share';
+		showWorkbenchApplyNotice('Attached the recovered share to this device.');
+	}
+
+	function revealRecoveryPhrase() {
+		if (!jazzAuth.auth.secret) {
+			throw new Error('The live-share identity is still loading. Try again in a moment.');
+		}
+		recoveryPhrase = RecoveryPhrase.fromSecret(jazzAuth.auth.secret);
+		recoveryDialogOpen = true;
+	}
+
 	function acknowledgeRecoveryPhrase() {
 		window.localStorage.setItem(RECOVERY_ACK_KEY, 'acknowledged');
 		recoveryPhrase = null;
@@ -1299,10 +1471,20 @@
 	}
 
 	async function restoreLiveShareIdentity(phrase: string) {
-		await jazzAuth.auth.login(RecoveryPhrase.toSecret(phrase));
+		const recoveredSecret = RecoveryPhrase.toSecret(phrase);
+		window.sessionStorage.setItem(RECOVERY_CONTINUATION_KEY, 'pending');
+		recoveredLiveBuilds = [];
+		recoveredLiveSharesError = null;
+		recoveredLiveSharesStatus = 'loading';
+		try {
+			await jazzAuth.auth.login(recoveredSecret);
+		} catch (error) {
+			window.sessionStorage.removeItem(RECOVERY_CONTINUATION_KEY);
+			recoveredLiveSharesStatus = 'error';
+			throw error;
+		}
 		recoveryPhrase = null;
 		sharingError = null;
-		if (activeLocalBuild.liveShare) await connectActiveLiveShare();
 	}
 
 	async function retrySharing() {
@@ -2771,12 +2953,16 @@
 <BuildsSharingSheet
 	bind:open={buildsSharingOpen}
 	bind:recoveryDialogOpen
+	bind:activeTab={buildsSharingTab}
 	builds={buildSummaries}
 	activeBuildId={localLibrary.activeBuildId}
 	mode={workspaceMode}
 	liveShare={liveShareSummary}
 	{snapshotUrl}
 	{recoveryPhrase}
+	recoveredLiveShares={recoveredLiveShareSummaries}
+	{recoveredLiveSharesStatus}
+	{recoveredLiveSharesError}
 	status={sharingStatus}
 	error={sharingError ?? storageError}
 	onSelectBuild={openLocalBuild}
@@ -2793,6 +2979,9 @@
 	onExportCurrent={exportCurrentBuild}
 	onExportLibrary={exportBuildLibrary}
 	onImportBackup={requestBackupImport}
+	onRefreshRecoveredLiveShares={jazzAuth.configured ? refreshRecoveredLiveShares : undefined}
+	onAttachRecoveredLiveShare={jazzAuth.configured ? attachRecoveredLiveShareToDevice : undefined}
+	onRevealRecoveryPhrase={revealRecoveryPhrase}
 	onRestoreIdentity={restoreLiveShareIdentity}
 	onAcknowledgeRecoveryPhrase={acknowledgeRecoveryPhrase}
 	onForkToDrafts={forkCurrentToDrafts}

@@ -4,6 +4,7 @@ import {
 	LOCAL_BUILD_LIBRARY_KEY,
 	LocalBuildLibraryError,
 	addLocalBuild,
+	attachRecoveredLiveShare,
 	createLocalBuildLibrary,
 	deleteLocalBuild,
 	duplicateLocalBuild,
@@ -133,6 +134,62 @@ describe('local build library', () => {
 		expect(() => parseLocalBuildLibrary('{"version":2,"builds":[]}')).toThrowError(
 			expect.objectContaining({ code: 'unsupported-version' })
 		);
+	});
+
+	it('attaches one recovered share without duplicating or overwriting an existing device draft', () => {
+		const recoveredState = createDefaultState();
+		recoveredState.stats.attack[0] = '808';
+		const initial = createLocalBuildLibrary(
+			{ name: 'Device build' },
+			runtime(['device-build'])
+		);
+
+		const attached = attachRecoveredLiveShare(
+			initial,
+			{
+				publicSlug: 'recovered-share',
+				name: 'Recovered build',
+				state: recoveredState,
+				revision: 7
+			},
+			runtime(['recovered-build'], '2026-08-05T12:01:00.000Z')
+		);
+		const recoveredBuild = getActiveLocalBuild(attached.library);
+
+		expect(attached.created).toBe(true);
+		expect(recoveredBuild).toMatchObject({
+			id: 'recovered-build',
+			name: 'Recovered build',
+			liveShare: {
+				publicSlug: 'recovered-share',
+				revision: 7
+			}
+		});
+		expect(recoveredBuild.liveShare).not.toHaveProperty('editSecret');
+		expect(recoveredBuild.liveShare?.lastSyncedState).toEqual(recoveredState);
+
+		const unsyncedState = createDefaultState();
+		unsyncedState.stats.attack[0] = '999';
+		const locallyChanged = updateLocalBuildState(
+			attached.library,
+			recoveredBuild.id,
+			unsyncedState
+		);
+		const reattached = attachRecoveredLiveShare(
+			locallyChanged,
+			{
+				publicSlug: 'recovered-share',
+				name: 'New remote title',
+				state: createDefaultState(),
+				revision: 8
+			},
+			runtime(['unused'])
+		);
+
+		expect(reattached.created).toBe(false);
+		expect(reattached.library.builds).toHaveLength(2);
+		expect(getActiveLocalBuild(reattached.library).state.stats.attack[0]).toBe('999');
+		expect(getActiveLocalBuild(reattached.library).liveShare?.revision).toBe(7);
 	});
 
 	it('redacts all live-share metadata from portable backups without changing device storage', () => {

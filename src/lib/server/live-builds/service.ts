@@ -2,6 +2,7 @@ import type {
 	CreateLiveBuildRequest,
 	CreateLiveBuildResponse,
 	JsonValue,
+	ListLiveBuildsResponse,
 	LiveBuildLinks,
 	LiveBuildResource,
 	PatchLiveBuildRequest,
@@ -205,6 +206,23 @@ export async function createLiveBuild(
 		links: links(origin, publicSlug, editSecret) as Required<LiveBuildLinks>,
 		editSecret
 	};
+}
+
+export async function listLiveBuilds(
+	actorId: string,
+	now = new Date()
+): Promise<ListLiveBuildsResponse> {
+	const repository = new JazzLiveBuildRepository(actorId);
+	const ownedBuilds = await repository.listBuildsByCreator(actorId);
+	const activeOwnedBuilds = ownedBuilds.filter(
+		(build) => build.creator_id === actorId && !isExpired(build, now)
+	);
+	activeOwnedBuilds.sort(
+		(left, right) =>
+			right.lastEditedAt.getTime() - left.lastEditedAt.getTime() ||
+			left.publicSlug.localeCompare(right.publicSlug)
+	);
+	return { builds: activeOwnedBuilds.map((build) => resource(build, 'creator')) };
 }
 
 export async function getLiveBuild(slug: string, actorId: string | null): Promise<LiveBuildResource> {

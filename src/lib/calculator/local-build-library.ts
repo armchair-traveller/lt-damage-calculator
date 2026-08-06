@@ -104,6 +104,12 @@ export type MergeLocalBuildLibrariesResult = {
 	remappedIds: Record<string, string>;
 };
 
+export type AttachRecoveredLiveShareResult = {
+	library: LocalBuildLibrary;
+	buildId: string;
+	created: boolean;
+};
+
 export interface LocalBuildReadableStorage {
 	getItem(key: string): string | null;
 }
@@ -371,6 +377,46 @@ export function addLocalBuild(
 		activeBuildId: build.id,
 		builds: [...library.builds, build]
 	};
+}
+
+export function attachRecoveredLiveShare(
+	library: LocalBuildLibrary,
+	input: {
+		publicSlug: string;
+		name: string;
+		state: CalculatorState;
+		revision: number;
+	},
+	runtime: LocalBuildRuntime = {}
+): AttachRecoveredLiveShareResult {
+	const existing = library.builds.find(
+		(build) => build.liveShare?.publicSlug === input.publicSlug
+	);
+	if (existing) {
+		return {
+			library: setActiveLocalBuild(library, existing.id),
+			buildId: existing.id,
+			created: false
+		};
+	}
+
+	let nextLibrary = addLocalBuild(
+		library,
+		{ name: input.name, state: input.state },
+		runtime
+	);
+	const buildId = nextLibrary.activeBuildId;
+	nextLibrary = updateLocalBuildLiveShare(
+		nextLibrary,
+		buildId,
+		{
+			publicSlug: input.publicSlug,
+			revision: input.revision,
+			lastSyncedState: input.state
+		},
+		runtime
+	);
+	return { library: nextLibrary, buildId, created: true };
 }
 
 export function duplicateLocalBuild(

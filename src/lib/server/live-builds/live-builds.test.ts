@@ -21,6 +21,7 @@ import { JazzLiveBuildRepository } from './repository';
 import {
 	MAX_LIVE_BUILD_EDITORS_PER_GENERATION,
 	cleanupExpiredLiveBuilds,
+	listLiveBuilds,
 	redeemLiveBuildEdit
 } from './service';
 
@@ -196,6 +197,67 @@ describe('live build envelopes', () => {
 		expect(
 			(restored.frozenSummary as { results: { base: { avg: string } } }).results.base.avg
 		).toBe('historical-result');
+	});
+});
+
+describe('owned live build discovery', () => {
+	it('returns only the actor\'s active builds with newest edits first', async () => {
+		const actorId = 'creator';
+		const now = new Date('2026-02-01T00:00:00.000Z');
+		const envelope = encodeStoredEnvelope(
+			createSnapshotEnvelope({ title: 'Recovered build', state: createDefaultState() })
+		);
+		const older = {
+			...cleanupCandidate(11),
+			title: 'Older active build',
+			envelope,
+			lastEditedAt: new Date('2026-01-10T00:00:00.000Z'),
+			expiresAt: new Date('2026-02-09T00:00:00.000Z')
+		};
+		const newest = {
+			...cleanupCandidate(12),
+			title: 'Newest active build',
+			envelope,
+			lastEditedAt: new Date('2026-01-20T00:00:00.000Z'),
+			expiresAt: new Date('2026-02-19T00:00:00.000Z')
+		};
+		const pinned = {
+			...cleanupCandidate(13),
+			title: 'Pinned active build',
+			envelope,
+			pinned: true,
+			lastEditedAt: new Date('2026-01-15T00:00:00.000Z'),
+			expiresAt: new Date('2026-01-01T00:00:00.000Z')
+		};
+		const expired = {
+			...cleanupCandidate(14),
+			title: 'Expired build',
+			envelope: new Uint8Array(),
+			lastEditedAt: new Date('2026-01-25T00:00:00.000Z'),
+			expiresAt: now
+		};
+		const anotherCreator = {
+			...cleanupCandidate(15),
+			title: 'Someone else\'s build',
+			creator_id: 'someone-else',
+			envelope: new Uint8Array(),
+			lastEditedAt: new Date('2026-01-30T00:00:00.000Z'),
+			expiresAt: new Date('2026-03-01T00:00:00.000Z')
+		};
+		const listByCreator = vi
+			.spyOn(JazzLiveBuildRepository.prototype, 'listBuildsByCreator')
+			.mockResolvedValue([expired, older, anotherCreator, pinned, newest]);
+
+		const result = await listLiveBuilds(actorId, now);
+
+		expect(listByCreator).toHaveBeenCalledWith(actorId);
+		expect(result.builds.map((build) => build.title)).toEqual([
+			'Newest active build',
+			'Pinned active build',
+			'Older active build'
+		]);
+		expect(result.builds.every((build) => build.role === 'creator')).toBe(true);
+		expect(result.builds.every((build) => !('editSecret' in build))).toBe(true);
 	});
 });
 

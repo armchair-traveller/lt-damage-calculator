@@ -28,6 +28,9 @@ export type BuildsSharingAction =
 	| 'export-current'
 	| 'export-library'
 	| 'import-backup'
+	| 'refresh-recovered-shares'
+	| 'attach-recovered-share'
+	| 'reveal-recovery'
 	| 'restore-identity'
 	| 'acknowledge-recovery'
 	| 'fork-to-drafts'
@@ -54,6 +57,18 @@ export interface LiveShareSummary {
 	revision?: number;
 }
 
+export type RecoveredLiveSharesStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+export interface RecoveredLiveShareSummary {
+	publicSlug: string;
+	title: string;
+	revision: number;
+	pinned: boolean;
+	lastEditedAt: string;
+	expiresAt: string | null;
+	attached: boolean;
+}
+
 export interface BuildsSharingStatus {
 	kind: BuildsSharingStatusKind;
 	label?: string;
@@ -70,6 +85,9 @@ export interface BuildsSharingSheetProps {
 	liveShare?: LiveShareSummary | null;
 	snapshotUrl?: string | null;
 	recoveryPhrase?: string | readonly string[] | null;
+	recoveredLiveShares?: readonly RecoveredLiveShareSummary[];
+	recoveredLiveSharesStatus?: RecoveredLiveSharesStatus;
+	recoveredLiveSharesError?: string | null;
 	status?: BuildsSharingStatus | null;
 	pendingAction?: BuildsSharingAction | null;
 	error?: string | null;
@@ -87,6 +105,9 @@ export interface BuildsSharingSheetProps {
 	onExportCurrent?: () => Awaitable<void>;
 	onExportLibrary?: () => Awaitable<void>;
 	onImportBackup?: () => Awaitable<void>;
+	onRefreshRecoveredLiveShares?: () => Awaitable<void>;
+	onAttachRecoveredLiveShare?: (publicSlug: string) => Awaitable<void>;
+	onRevealRecoveryPhrase?: () => Awaitable<void>;
 	onRestoreIdentity?: (phrase: string) => Awaitable<void>;
 	onAcknowledgeRecoveryPhrase?: () => Awaitable<void>;
 	onForkToDrafts?: () => Awaitable<void>;
