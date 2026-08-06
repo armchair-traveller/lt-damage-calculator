@@ -484,7 +484,7 @@
 									bind:value={newBuildName}
 									onkeydown={(event) => handleTextSubmit(event, createBuild)}
 								/>
-								<InputGroup.Addon align="inline-end">
+								<InputGroup.Addon align="inline-end" class="has-[>button]:mr-0">
 									<InputGroup.Button
 										variant="default"
 										size="sm"
@@ -540,7 +540,7 @@
 														bind:value={renameValue}
 														onkeydown={(event) => handleTextSubmit(event, () => saveRename(build))}
 													/>
-													<InputGroup.Addon align="inline-end">
+													<InputGroup.Addon align="inline-end" class="has-[>button]:mr-0">
 														<InputGroup.Button
 															variant="default"
 															size="sm"
@@ -622,7 +622,7 @@
 										<Field.Label for={`${componentId}-snapshot-link`}>Snapshot link</Field.Label>
 										<InputGroup.Root>
 											<InputGroup.Input id={`${componentId}-snapshot-link`} value={displayedSnapshotUrl} readonly />
-											<InputGroup.Addon align="inline-end">
+											<InputGroup.Addon align="inline-end" class="has-[>button]:mr-0">
 												<InputGroup.Button size="icon-sm" aria-label="Copy snapshot link" title="Copy snapshot link" onclick={() => copyText(displayedSnapshotUrl, 'snapshot')}>
 													{#if copiedTarget === 'snapshot'}<CheckIcon />{:else}<CopyIcon />{/if}
 												</InputGroup.Button>
@@ -669,7 +669,7 @@
 										<Field.Description>Anyone with this link can follow the live build.</Field.Description>
 										<InputGroup.Root>
 											<InputGroup.Input id={`${componentId}-view-link`} value={liveShare.viewUrl} readonly />
-											<InputGroup.Addon align="inline-end">
+											<InputGroup.Addon align="inline-end" class="has-[>button]:mr-0">
 												<InputGroup.Button size="icon-sm" aria-label="Copy view link" title="Copy view link" onclick={() => copyText(liveShare.viewUrl, 'view')}>
 													{#if copiedTarget === 'view'}<CheckIcon />{:else}<CopyIcon />{/if}
 												</InputGroup.Button>
@@ -683,7 +683,7 @@
 											<Field.Description>Anyone with this secret link can change the shared build.</Field.Description>
 											<InputGroup.Root>
 												<InputGroup.Input id={`${componentId}-edit-link`} value={liveShare.editUrl} readonly />
-												<InputGroup.Addon align="inline-end">
+												<InputGroup.Addon align="inline-end" class="has-[>button]:mr-0">
 													<InputGroup.Button size="icon-sm" aria-label="Copy edit link" title="Copy edit link" onclick={() => copyText(liveShare.editUrl ?? '', 'edit')}>
 														{#if copiedTarget === 'edit'}<CheckIcon />{:else}<CopyIcon />{/if}
 													</InputGroup.Button>
