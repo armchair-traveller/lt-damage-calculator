@@ -30,9 +30,12 @@ export const GET: RequestHandler = async ({ request }) => {
 		const counts = {
 			examined: result.examined,
 			deleted: result.deleted,
-			failed: result.failed
+			failed: result.failed,
+			presenceExamined: result.presenceExamined,
+			presenceDeleted: result.presenceDeleted,
+			presenceFailed: result.presenceFailed
 		};
-		if (result.failed > 0) {
+		if (result.failed > 0 || result.presenceFailed > 0) {
 			console.warn('[live-builds] Cleanup completed with row failures.', counts);
 		} else {
 			console.info('[live-builds] Cleanup completed.', counts);

@@ -1,0 +1,173 @@
+{
+  "liveBuilds": {
+    "columns": [
+      {
+        "name": "publicSlug",
+        "column_type": {
+          "type": "Text"
+        },
+        "nullable": false
+      },
+      {
+        "name": "title",
+        "column_type": {
+          "type": "Text"
+        },
+        "nullable": false
+      },
+      {
+        "name": "creator_id",
+        "column_type": {
+          "type": "Text"
+        },
+        "nullable": false
+      },
+      {
+        "name": "envelope",
+        "column_type": {
+          "type": "Bytea"
+        },
+        "nullable": false
+      },
+      {
+        "name": "stateVersion",
+        "column_type": {
+          "type": "Integer"
+        },
+        "nullable": false
+      },
+      {
+        "name": "formulaRevision",
+        "column_type": {
+          "type": "Text"
+        },
+        "nullable": false
+      },
+      {
+        "name": "revision",
+        "column_type": {
+          "type": "Integer"
+        },
+        "nullable": false
+      },
+      {
+        "name": "editGeneration",
+        "column_type": {
+          "type": "Integer"
+        },
+        "nullable": false
+      },
+      {
+        "name": "pinned",
+        "column_type": {
+          "type": "Boolean"
+        },
+        "nullable": false
+      },
+      {
+        "name": "lastEditedAt",
+        "column_type": {
+          "type": "Timestamp"
+        },
+        "nullable": false
+      },
+      {
+        "name": "expiresAt",
+        "column_type": {
+          "type": "Timestamp"
+        },
+        "nullable": true
+      }
+    ],
+    "indexed_columns": [
+      "publicSlug",
+      "creator_id",
+      "expiresAt",
+      "pinned"
+    ]
+  },
+  "liveBuildEditCapabilities": {
+    "columns": [
+      {
+        "name": "build_id",
+        "column_type": {
+          "type": "Uuid"
+        },
+        "nullable": false,
+        "references": "liveBuilds"
+      },
+      {
+        "name": "generation",
+        "column_type": {
+          "type": "Integer"
+        },
+        "nullable": false
+      },
+      {
+        "name": "secretHash",
+        "column_type": {
+          "type": "Text"
+        },
+        "nullable": false
+      },
+      {
+        "name": "revoked",
+        "column_type": {
+          "type": "Boolean"
+        },
+        "nullable": false
+      }
+    ],
+    "indexed_columns": [
+      "build_id",
+      "generation",
+      "revoked"
+    ]
+  },
+  "liveBuildEditors": {
+    "columns": [
+      {
+        "name": "build_id",
+        "column_type": {
+          "type": "Uuid"
+        },
+        "nullable": false,
+        "references": "liveBuilds"
+      },
+      {
+        "name": "user_id",
+        "column_type": {
+          "type": "Text"
+        },
+        "nullable": false
+      },
+      {
+        "name": "generation",
+        "column_type": {
+          "type": "Integer"
+        },
+        "nullable": false
+      },
+      {
+        "name": "revoked",
+        "column_type": {
+          "type": "Boolean"
+        },
+        "nullable": false
+      },
+      {
+        "name": "redeemedAt",
+        "column_type": {
+          "type": "Timestamp"
+        },
+        "nullable": false
+      }
+    ],
+    "indexed_columns": [
+      "build_id",
+      "user_id",
+      "generation",
+      "revoked"
+    ]
+  }
+}

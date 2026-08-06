@@ -1,7 +1,7 @@
 <svelte:options runes={true} />
 
 <script lang="ts">
-	import { replaceState } from '$app/navigation';
+	import { afterNavigate, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import favicon from '$lib/assets/favicon.ico';
 	import { onMount, tick } from 'svelte';
@@ -23,12 +23,15 @@
 	import ImageUpIcon from '@lucide/svelte/icons/image-up';
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import LockIcon from '@lucide/svelte/icons/lock';
+	import EyeIcon from '@lucide/svelte/icons/eye';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ScaleIcon from '@lucide/svelte/icons/scale';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import TargetIcon from '@lucide/svelte/icons/target';
+	import UsersIcon from '@lucide/svelte/icons/users';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { getClassArt } from '$lib/calculator/class-art.js';
 	import { isDisplayedTie } from '$lib/calculator/comparison.js';
@@ -85,6 +88,7 @@
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
 	import BuildsSharingSheet from '$lib/components/builds-sharing-sheet.svelte';
+	import LiveBuildPresence from '$lib/components/live-build-presence.svelte';
 	import LiveBuildSubscription from '$lib/components/live-build-subscription.svelte';
 	import type {
 		BuildsSharingMode,
@@ -143,6 +147,17 @@
 		stopLiveBuild
 	} from '$lib/live-builds/client.js';
 	import type { LiveBuildResource } from '$lib/live-builds/contracts.js';
+	import {
+		collaborationTargetLabel,
+		collaborationTargetPanel,
+		collaborationTargetSurface,
+		parameterCollaborationTarget,
+		parseCollaborationTarget,
+		statCollaborationTarget,
+		type CollaborationParameterKey,
+		type CollaborationParticipant,
+		type CollaborationTarget
+	} from '$lib/live-builds/collaboration.js';
 	import {
 		applyClassPreset,
 		applyQuickPreset,
@@ -256,6 +271,8 @@
 	let liveLinkRotationInProgress = false;
 	let liveConnectionGeneration = 0;
 	let locationGeneration = 0;
+	let activeCollaborationRoom = '';
+	let initialWorkspaceLocationHandled = false;
 	let workbenchApplyNotice = $state('');
 	let workbenchApplyNoticeTimeout: number | null = null;
 	let pendingGearImports = $state<GearComparisonCandidate[]>([]);
@@ -263,12 +280,46 @@
 	let equivalenceTab = $state('damage');
 	let mobileStatsTab = $state('base');
 	let focusedStatInput = $state('');
+	let collaborationTarget = $state<CollaborationTarget | null>(null);
+	let collaborationParticipants = $state.raw<CollaborationParticipant[]>([]);
+	let collaborationPopoverOpen = $state(false);
 	let draftStatInputs = $state.raw<Record<string, string>>({});
 	let equivalenceValues = $state({ perc: 1, critical: 10 });
 	const visiblePrimaryVerdicts = new SvelteSet<Element>();
 	const jazzAuth = getJazzAuthContext();
 
+	$effect(() => {
+		const nextRoom =
+			(workspaceMode === 'live-edit' || workspaceMode === 'live-view') && liveSlug
+				? `${liveSlug}:${workspaceMode}`
+				: '';
+		if (nextRoom === activeCollaborationRoom) return;
+		activeCollaborationRoom = nextRoom;
+		collaborationTarget = null;
+		collaborationParticipants = [];
+		collaborationPopoverOpen = false;
+		if (workspaceMode !== 'live-edit') buffsOpen = false;
+	});
+
 	const activeLocalBuild = $derived(getActiveLocalBuild(localLibrary));
+	const collaborationMode = $derived(
+		workspaceMode === 'live-edit' || workspaceMode === 'live-view' ? workspaceMode : null
+	);
+	const collaborationRole = $derived(
+		liveBuild?.role ?? (workspaceMode === 'live-edit' ? 'editor' : 'viewer')
+	);
+	const visibleCollaborationParticipants = $derived.by(() =>
+		collaborationMode
+			? collaborationParticipants
+				.slice()
+				.sort(
+					(left, right) =>
+						Number(right.isSelf) - Number(left.isSelf) ||
+						Number(right.mode === 'edit') - Number(left.mode === 'edit') ||
+						left.alias.localeCompare(right.alias)
+				)
+			: []
+	);
 	const readOnlyWorkspace = $derived(
 		workspaceMode === 'live-view' || workspaceMode === 'snapshot-view'
 	);
@@ -461,13 +512,18 @@
 	const hasBChanges = $derived(panelHasEnteredValues(calculator.statsB));
 	const pendingGearImport = $derived(pendingGearImports[0]);
 
+	afterNavigate(() => {
+		if (initialWorkspaceLocationHandled) return;
+		initialWorkspaceLocationHandled = true;
+		void initializeWorkspaceFromLocation();
+	});
+
 	onMount(() => {
 		if (window.sessionStorage.getItem(RECOVERY_CONTINUATION_KEY)) {
 			window.sessionStorage.removeItem(RECOVERY_CONTINUATION_KEY);
 			buildsSharingTab = 'backup';
 			buildsSharingOpen = true;
 		}
-		void initializeWorkspaceFromLocation();
 		if (jazzAuth.configured) void refreshRecoveredLiveShares();
 		const handleHashChange = () => void initializeWorkspaceFromLocation();
 		const handleStorage = (event: StorageEvent) => {
@@ -1686,6 +1742,102 @@
 		calculator.selectedBuffs = next;
 	}
 
+	function openBuffsSheet() {
+		buffsOpen = true;
+		if (workspaceMode === 'live-edit') collaborationTarget = 'buffs';
+	}
+
+	function handleBuffsOpenChange(open: boolean) {
+		if (!open && collaborationTarget === 'buffs') collaborationTarget = null;
+	}
+
+	function weightCollaborationTarget(
+		key: 'minWeight' | 'summonWeight' | 'backWeight' | 'bossWeight'
+	): CollaborationTarget {
+		let parameterKey: CollaborationParameterKey;
+		if (key === 'minWeight') parameterKey = 'minimum-weight';
+		else if (key === 'summonWeight') parameterKey = 'summon-weight';
+		else if (key === 'backWeight') parameterKey = 'back-weight';
+		else parameterKey = 'boss-weight';
+		return parameterCollaborationTarget(parameterKey);
+	}
+
+	function readCollaborationTarget(element: EventTarget | null): CollaborationTarget | null {
+		if (!(element instanceof Element)) return null;
+		return parseCollaborationTarget(
+			element.closest<HTMLElement>('[data-collaboration-target]')?.dataset.collaborationTarget
+		);
+	}
+
+	function handleCollaborationInteraction(event: FocusEvent | PointerEvent) {
+		if (workspaceMode !== 'live-edit') return;
+		collaborationTarget = readCollaborationTarget(event.target);
+	}
+
+	function handleCollaborationParticipants(participants: CollaborationParticipant[]) {
+		collaborationParticipants = participants;
+	}
+
+	function remoteCollaboratorsForTarget(target: CollaborationTarget) {
+		return visibleCollaborationParticipants.filter(
+			(participant) => !participant.isSelf && participant.mode === 'edit' && participant.target === target
+		);
+	}
+
+	function remoteCollaboratorsForSurface(target: CollaborationTarget) {
+		const surface = collaborationTargetSurface(target);
+		return visibleCollaborationParticipants.filter(
+			(participant) =>
+				!participant.isSelf &&
+				participant.mode === 'edit' &&
+				participant.target !== null &&
+				collaborationTargetSurface(participant.target) === surface
+		);
+	}
+
+	function remoteCollaboratorsForPanel(panelId: WorkbenchPanelId) {
+		const prefix = `stat:${panelId}:`;
+		return visibleCollaborationParticipants.filter(
+			(participant) =>
+				!participant.isSelf &&
+				participant.mode === 'edit' &&
+				participant.target?.startsWith(prefix)
+		);
+	}
+
+	function participantActivity(participant: CollaborationParticipant) {
+		if (participant.mode === 'view') return 'Viewing';
+		return participant.target ? collaborationTargetLabel(participant.target) : 'Editing';
+	}
+
+	function participantDisplayName(participant: CollaborationParticipant) {
+		return participant.isSelf ? 'You' : participant.alias;
+	}
+
+	function visibleCollaborationTarget(target: CollaborationTarget) {
+		const selector = `[data-collaboration-target="${CSS.escape(target)}"]`;
+		return Array.from(document.querySelectorAll<HTMLElement>(selector)).find(
+			(element) => element.getClientRects().length > 0
+		);
+	}
+
+	async function revealCollaborationParticipant(participant: CollaborationParticipant) {
+		const target = participant.target;
+		if (!target || (workspaceMode === 'live-view' && target === 'buffs')) return;
+
+		collaborationPopoverOpen = false;
+		const panelId = collaborationTargetPanel(target);
+		if (panelId) mobileStatsTab = panelId;
+		if (target === 'buffs') buffsOpen = true;
+		else if (buffsOpen) buffsOpen = false;
+
+		await tick();
+		const element = visibleCollaborationTarget(target);
+		if (!element) return;
+		const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		element.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' });
+	}
+
 	function toneClass(value: string | undefined) {
 		const tone = signedTone(value ?? '');
 		const numericValue = tone === 'neutral' ? Number.NaN : Number((value ?? '').replace(/[^0-9.-]/g, ''));
@@ -2010,7 +2162,11 @@
 </script>
 
 <svelte:window ononline={handleOnline} onoffline={handleOffline} />
-<svelte:document onvisibilitychange={handleVisibilityChange} />
+<svelte:document
+	onvisibilitychange={handleVisibilityChange}
+	onfocusin={handleCollaborationInteraction}
+	onpointerdown={handleCollaborationInteraction}
+/>
 
 <svelte:head>
 	<title>LaTale Damage Calculator</title>
@@ -2034,6 +2190,15 @@
 						onUnavailable={handleLiveUnavailable}
 						onError={(error) => handleLiveError(error, 'The live connection was interrupted.')}
 					/>
+					{#if collaborationMode}
+						<LiveBuildPresence
+							slug={liveSlug}
+							mode={collaborationMode}
+							role={collaborationRole}
+							target={workspaceMode === 'live-edit' ? collaborationTarget : null}
+							onParticipants={handleCollaborationParticipants}
+						/>
+					{/if}
 				{/key}
 			{/if}
 		</JazzSvelteProvider>
@@ -2136,6 +2301,53 @@
 			{sharingStatus.label}
 		</Badge>
 		<span class="max-w-64 truncate text-sm font-medium">{displayedBuildTitle}</span>
+		{#if collaborationMode}
+			<Popover.Root bind:open={collaborationPopoverOpen}>
+				<Popover.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} size="sm" variant="outline" aria-label="Show people in this live build">
+							<UsersIcon data-icon="inline-start" />
+							{visibleCollaborationParticipants.length} here
+						</Button>
+					{/snippet}
+				</Popover.Trigger>
+				<Popover.Content align="end" side="top" sideOffset={8} class="w-72 rounded-xl p-3">
+					<Popover.Header>
+						<Popover.Title class="flex items-center gap-2 text-sm">
+							<UsersIcon class="size-4 text-primary" />
+							People here
+						</Popover.Title>
+						<Popover.Description class="text-xs">
+							Editors show the field they are using. Select an active field to reveal it once.
+						</Popover.Description>
+					</Popover.Header>
+					{#if visibleCollaborationParticipants.length > 0}
+						<div role="list" class="flex max-h-72 flex-col gap-1 overflow-y-auto">
+							{#each visibleCollaborationParticipants as participant (participant.id)}
+								{@const canReveal = participant.target && !(workspaceMode === 'live-view' && participant.target === 'buffs')}
+								<div role="listitem">
+									{#if canReveal}
+										<Button
+											variant="ghost"
+											class="h-auto w-full justify-start gap-2 px-2 py-2 text-left"
+											onclick={() => revealCollaborationParticipant(participant)}
+										>
+											{@render collaborationParticipantContent(participant)}
+										</Button>
+									{:else}
+										<div class="flex min-h-9 w-full items-center gap-2 px-2 py-2 text-left">
+											{@render collaborationParticipantContent(participant)}
+										</div>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<p class="text-xs text-muted-foreground">Connecting presence…</p>
+					{/if}
+				</Popover.Content>
+			</Popover.Root>
+		{/if}
 		{#if canForkSharedWorkspace}
 			<Button size="sm" onclick={forkCurrentToDrafts}>
 				<GitForkIcon data-icon="inline-start" />
@@ -2164,7 +2376,11 @@
 {/if}
 
 {#if !snapshotFrozenOnly}
-<main id="calculator-workspace" class="adventure-shell min-h-dvh text-foreground" inert={readOnlyWorkspace}>
+<main
+	id="calculator-workspace"
+	class="adventure-shell min-h-dvh text-foreground"
+	inert={readOnlyWorkspace}
+>
 	<ClassArtRail
 		art={selectedClassArt}
 		selectedPreset={selectedClassPreset}
@@ -2217,7 +2433,7 @@
 										variant="outline"
 										size="icon"
 										aria-label="Buffs"
-										onclick={() => (buffsOpen = true)}
+										onclick={openBuffsSheet}
 									>
 										<SparklesIcon />
 									</Button>
@@ -2274,11 +2490,15 @@
 	</header>
 
 	<section class="workspace-grid mx-auto grid max-w-[1760px] min-w-0 gap-4 px-4 py-5 lg:px-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
-		<section class="game-panel workbench-panel min-w-0 overflow-hidden border">
+		<section
+			class="game-panel workbench-panel min-w-0 overflow-hidden border"
+			data-collaboration-target="workbench"
+		>
 			<div class="game-panel-header flex flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5">
 				<div class="flex min-w-0 flex-wrap items-center gap-2">
 					<BarChart3Icon class="size-4 text-primary" />
 					<h2 class="text-sm font-semibold">Stat Workbench</h2>
+					{@render collaborationPanelMarker('workbench')}
 					{#if workbenchApplyNotice}
 						<Badge variant="secondary" class="border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200">
 							<CheckIcon data-icon="inline-start" />
@@ -2405,9 +2625,9 @@
 			<div class="workbench-table workbench-mobile md:hidden">
 				<Tabs.Tabs bind:value={mobileStatsTab}>
 					<Tabs.List class="m-3 grid w-[calc(100%-1.5rem)] grid-cols-3">
-						<Tabs.Trigger value="base">Base</Tabs.Trigger>
-						<Tabs.Trigger value="a">A</Tabs.Trigger>
-						<Tabs.Trigger value="b">B</Tabs.Trigger>
+						<Tabs.Trigger value="base">Base {@render mobilePanelPresence('base')}</Tabs.Trigger>
+						<Tabs.Trigger value="a">A {@render mobilePanelPresence('a')}</Tabs.Trigger>
+						<Tabs.Trigger value="b">B {@render mobilePanelPresence('b')}</Tabs.Trigger>
 					</Tabs.List>
 					<Tabs.Content value="base">
 						{@render mobileStatsPanel('mobile-base', 'base', calculator.stats)}
@@ -2606,13 +2826,22 @@
 				</Tooltip.Provider>
 			</section>
 
-			<section id="parameters" class="game-panel settings-panel min-w-0 border">
+			<section
+				id="parameters"
+				class="game-panel settings-panel min-w-0 border"
+				data-collaboration-target="parameters"
+			>
 				<div class="game-panel-header flex items-center gap-2 border-b px-4 py-2.5">
 					<SlidersHorizontalIcon class="size-4 text-primary" />
 					<h2 class="text-sm font-semibold">Parameters</h2>
+					{@render collaborationPanelMarker('parameters')}
 				</div>
 				<div class="space-y-4 p-4">
-					<div class="space-y-2">
+					<div
+						class="relative space-y-2"
+						data-collaboration-target={parameterCollaborationTarget('class-preset')}
+					>
+						{@render collaborationFieldMarker(parameterCollaborationTarget('class-preset'))}
 						<Label for="class-preset">Class preset</Label>
 						<Popover.Root bind:open={classPresetOpen}>
 							<Popover.Trigger>
@@ -2638,6 +2867,7 @@
 								align="start"
 								sideOffset={6}
 								class="w-[var(--bits-popover-anchor-width)] max-w-[calc(100vw-2rem)] rounded-md p-0"
+								data-collaboration-target={parameterCollaborationTarget('class-preset')}
 							>
 								<Command.Root label="Class presets" class="rounded-md">
 									<Command.Input placeholder="Search class presets..." />
@@ -2665,7 +2895,11 @@
 					</div>
 
 					<div class="grid grid-cols-2 gap-2">
-						<div class="space-y-2">
+						<div
+							class="relative space-y-2"
+							data-collaboration-target={parameterCollaborationTarget('target')}
+						>
+							{@render collaborationFieldMarker(parameterCollaborationTarget('target'))}
 							<Label for="target">Target</Label>
 							<NativeSelect id="target" bind:value={calculator.settings.target} class="w-full">
 								{#each Object.entries(TARGETS) as [key, target] (key)}
@@ -2673,15 +2907,27 @@
 								{/each}
 							</NativeSelect>
 						</div>
-						<div class="space-y-2">
+						<div
+							class="relative space-y-2"
+							data-collaboration-target={parameterCollaborationTarget('final-factor')}
+						>
+							{@render collaborationFieldMarker(parameterCollaborationTarget('final-factor'))}
 							<Label for="ff">Final %</Label>
 							<Input id="ff" type="number" bind:value={calculator.settings.fF} class="text-right tabular-nums" />
 						</div>
-						<div class="space-y-2">
+						<div
+							class="relative space-y-2"
+							data-collaboration-target={parameterCollaborationTarget('stats-factor')}
+						>
+							{@render collaborationFieldMarker(parameterCollaborationTarget('stats-factor'))}
 							<Label for="sf">Stats %</Label>
 							<Input id="sf" type="number" bind:value={calculator.settings.sF} class="text-right tabular-nums" />
 						</div>
-						<div class="space-y-2">
+						<div
+							class="relative space-y-2"
+							data-collaboration-target={parameterCollaborationTarget('skill-factor')}
+						>
+							{@render collaborationFieldMarker(parameterCollaborationTarget('skill-factor'))}
 							<Label for="af">Skill</Label>
 							<Input id="af" type="number" bind:value={calculator.settings.aF} class="text-right tabular-nums" />
 						</div>
@@ -2778,10 +3024,17 @@
 </main>
 {/if}
 
-<Sheet.Root bind:open={buffsOpen}>
-	<Sheet.Content side="right" class="data-[side=right]:w-[min(100vw,54rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0">
+<Sheet.Root bind:open={buffsOpen} onOpenChange={handleBuffsOpenChange}>
+	<Sheet.Content
+		side="right"
+		class="data-[side=right]:w-[min(100vw,54rem)] data-[side=right]:sm:max-w-none overflow-y-auto p-0"
+		data-collaboration-target="buffs"
+	>
 		<Sheet.Header class="fantasy-sheet-header border-b border-border/80 px-5 py-4">
-			<Sheet.Title>Buffs</Sheet.Title>
+			<div class="flex items-center gap-2">
+				<Sheet.Title>Buffs</Sheet.Title>
+				{@render collaborationPanelMarker('buffs')}
+			</div>
 		</Sheet.Header>
 
 		<div class="space-y-5 p-5">
@@ -3032,13 +3285,101 @@
 	</AlertDialog.Content>
 </AlertDialog.Root>
 
+{#snippet collaborationParticipantContent(participant: CollaborationParticipant)}
+	<span
+		class="size-2.5 shrink-0 rounded-full ring-2 ring-background"
+		style:background-color={participant.color}
+	></span>
+	<span class="min-w-0 flex-1">
+		<span class="block truncate text-xs font-medium">
+			{participantDisplayName(participant)}
+			{#if participant.role === 'creator'} · Owner{/if}
+		</span>
+		<span class="block truncate text-[11px] font-normal text-muted-foreground">
+			{participantActivity(participant)}
+		</span>
+	</span>
+	{#if participant.mode === 'view'}
+		<EyeIcon data-icon="inline-end" class="shrink-0 text-muted-foreground" />
+	{:else}
+		<PencilIcon data-icon="inline-end" class="shrink-0 text-muted-foreground" />
+	{/if}
+{/snippet}
+
+{#snippet collaborationPanelMarker(target: CollaborationTarget)}
+	{@const collaborators = remoteCollaboratorsForSurface(target)}
+	{#if collaborators.length > 0}
+		<span aria-hidden="true" class="pointer-events-none flex items-center gap-1.5 text-[10px] text-muted-foreground">
+			<span class="flex -space-x-1">
+				{#each collaborators.slice(0, 3) as participant (participant.id)}
+					<span
+						class="size-2 rounded-full ring-1 ring-card"
+						style:background-color={participant.color}
+					></span>
+				{/each}
+			</span>
+			<span class="hidden sm:inline">
+				{collaborators[0].alias}{collaborators.length > 1 ? ` +${collaborators.length - 1}` : ''}
+			</span>
+		</span>
+	{/if}
+{/snippet}
+
+{#snippet collaborationFieldMarker(target: CollaborationTarget)}
+	{@const collaborators = remoteCollaboratorsForTarget(target)}
+	{#if collaborators.length > 0}
+		<div aria-hidden="true" class="pointer-events-none absolute inset-0 z-20 rounded-sm motion-reduce:transition-none">
+			<span
+				class="absolute inset-0 rounded-sm"
+				style={`box-shadow: inset 0 0 0 2px ${collaborators[0].color};`}
+			></span>
+			<span
+				class="absolute -left-0.5 inset-y-1 w-1 rounded-full shadow-sm"
+				style:background-color={collaborators[0].color}
+			></span>
+			<span class="absolute left-1 top-1 flex -space-x-0.5">
+				{#each collaborators.slice(0, 3) as participant (participant.id)}
+					<span
+						class="size-1.5 rounded-full ring-1 ring-background"
+						style:background-color={participant.color}
+					></span>
+				{/each}
+			</span>
+			<span
+				class="absolute -right-0.5 -top-2 hidden max-w-28 items-center gap-1 rounded-full border bg-popover/95 px-1.5 py-0.5 text-[9px] font-medium leading-none text-popover-foreground shadow-sm md:flex"
+				style:border-color={collaborators[0].color}
+			>
+				<span class="truncate">{collaborators[0].alias}</span>
+				{#if collaborators.length > 1}<span>+{collaborators.length - 1}</span>{/if}
+			</span>
+		</div>
+	{/if}
+{/snippet}
+
+{#snippet mobilePanelPresence(panelId: WorkbenchPanelId)}
+	{@const collaborators = remoteCollaboratorsForPanel(panelId)}
+	{#if collaborators.length > 0}
+		<span aria-hidden="true" class="ml-1 inline-flex items-center -space-x-0.5">
+			{#each collaborators.slice(0, 3) as participant (participant.id)}
+				<span
+					class="size-1.5 rounded-full ring-1 ring-background"
+					style:background-color={participant.color}
+				></span>
+			{/each}
+		</span>
+	{/if}
+{/snippet}
+
 {#snippet statInput(panelId: string, toneId: WorkbenchPanelId, stats: UiStats, key: StatKey, index: 0 | 1)}
 	{@const inputId = statInputId(panelId, key, index)}
+	{@const collaborationFieldTarget = statCollaborationTarget(toneId, key, index)}
 	{@const state = inputState(toneId, stats[key][index], inputId, index)}
 	{@const cellImpact = cellImpactFor(toneId, key, index)}
 	<div
 		class={`group/cell relative border-b border-l border-border/70 p-1 transition-colors ${panelCellClass(toneId, state)}`}
+		data-collaboration-target={collaborationFieldTarget}
 	>
+		{@render collaborationFieldMarker(collaborationFieldTarget)}
 		<Input
 			id={inputId}
 			type="text"
@@ -3164,7 +3505,11 @@
 	key: 'minWeight',
 	options: number[]
 )}
-	<fieldset class="space-y-2">
+	<fieldset
+		class="relative space-y-2"
+		data-collaboration-target={weightCollaborationTarget(key)}
+	>
+		{@render collaborationFieldMarker(weightCollaborationTarget(key))}
 		<legend class="text-sm font-medium">{label}</legend>
 		<div class="grid grid-cols-2 rounded-md bg-muted p-1">
 			{#each options as option (option)}
@@ -3198,7 +3543,11 @@
 	max: number,
 	step: number
 )}
-	<div class="space-y-2">
+	<div
+		class="relative space-y-2"
+		data-collaboration-target={weightCollaborationTarget(key)}
+	>
+		{@render collaborationFieldMarker(weightCollaborationTarget(key))}
 		<div class="flex items-center justify-between gap-2 text-sm">
 			<Label>{label}</Label>
 			<span class="text-xs text-muted-foreground tabular-nums">{formatPercent(value)}</span>

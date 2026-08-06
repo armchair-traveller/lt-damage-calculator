@@ -99,6 +99,7 @@ jobs:
         run: |
           npx --no-install jazz-tools deploy "$PUBLIC_JAZZ_APP_ID" \
             --schema-dir src/lib \
+            --migrations-dir src/lib/migrations \
             --server-url "$PUBLIC_JAZZ_SERVER_URL" \
             --admin-secret "$JAZZ_ADMIN_SECRET"
 

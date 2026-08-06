@@ -22,6 +22,7 @@ export const LIVE_BUILD_TTL_DAYS = 30;
 export const MAX_ACTIVE_LIVE_BUILDS = 20;
 export const MAX_PINNED_LIVE_BUILDS = 5;
 export const MAX_LIVE_BUILD_EDITORS_PER_GENERATION = 32;
+export const LIVE_BUILD_PRESENCE_RETENTION_HOURS = 24;
 export const CLEANUP_BATCH_SIZE = 50;
 export const CLEANUP_RUNTIME_BUDGET_MS = 8_000;
 
@@ -34,6 +35,9 @@ export type CleanupExpiredLiveBuildsResult = {
 	examined: number;
 	deleted: number;
 	failed: number;
+	presenceExamined: number;
+	presenceDeleted: number;
+	presenceFailed: number;
 };
 
 type LiveBuildRole = LiveBuildResource['role'];
@@ -416,6 +420,9 @@ export async function cleanupExpiredLiveBuilds(
 	let examined = 0;
 	let deleted = 0;
 	let failed = 0;
+	let presenceExamined = 0;
+	let presenceDeleted = 0;
+	let presenceFailed = 0;
 
 	while (withinBudget()) {
 		const candidates = await repository.findExpiredBuilds(now, batchSize, failedIds.size);
@@ -445,7 +452,45 @@ export async function cleanupExpiredLiveBuilds(
 		if (!completedBatch || candidates.length < batchSize) break;
 	}
 
-	return { examined, deleted, failed };
+	const staleBefore = new Date(
+		now.getTime() - LIVE_BUILD_PRESENCE_RETENTION_HOURS * 60 * 60 * 1000
+	);
+	const failedPresenceIds = new Set<string>();
+	while (withinBudget()) {
+		const candidates = await repository.findStalePresence(
+			staleBefore,
+			batchSize,
+			failedPresenceIds.size
+		);
+		if (candidates.length === 0) break;
+
+		let completedBatch = true;
+		for (const candidate of candidates) {
+			if (!withinBudget()) {
+				completedBatch = false;
+				break;
+			}
+			presenceExamined += 1;
+			try {
+				await repository.deletePresence(candidate.id);
+				presenceDeleted += 1;
+			} catch {
+				failedPresenceIds.add(candidate.id);
+				presenceFailed += 1;
+			}
+		}
+
+		if (!completedBatch || candidates.length < batchSize) break;
+	}
+
+	return {
+		examined,
+		deleted,
+		failed,
+		presenceExamined,
+		presenceDeleted,
+		presenceFailed
+	};
 }
 
 export function isValidLiveBuildSlug(slug: string): boolean {

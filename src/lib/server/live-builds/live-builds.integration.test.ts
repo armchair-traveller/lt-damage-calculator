@@ -10,7 +10,7 @@ import { LIVE_BUILD_IDENTITY_AUDIENCE } from '$lib/live-builds/contracts';
 import { permissions } from '$lib/permissions';
 import { app } from '$lib/schema';
 
-import { shutdownLiveBuildJazzContext } from './jazz-context';
+import { getLiveBuildJazzContext, shutdownLiveBuildJazzContext } from './jazz-context';
 import { LiveBuildError } from './errors';
 import { JazzLiveBuildRepository } from './repository';
 import {
@@ -36,6 +36,12 @@ function actor(fill: number): string {
 	const secret = Buffer.alloc(32, fill).toString('base64url');
 	const proof = mintLocalFirstToken(secret, LIVE_BUILD_IDENTITY_AUDIENCE, 60);
 	return verifyLocalFirstIdentityProof(proof, LIVE_BUILD_IDENTITY_AUDIENCE).id;
+}
+
+function localFirstIdentity(fill: number): { id: string; token: string } {
+	const secret = Buffer.alloc(32, fill).toString('base64url');
+	const token = mintLocalFirstToken(secret, APP_ID, 60);
+	return { id: verifyLocalFirstIdentityProof(token, APP_ID).id, token };
 }
 
 beforeAll(async () => {
@@ -64,6 +70,123 @@ afterAll(async () => {
 }, 20_000);
 
 describe('Jazz-backed live build lifecycle', () => {
+	it('allows accountless visitors to publish only owned, non-authoritative presence', async () => {
+		const creator = localFirstIdentity(21);
+		const visitor = localFirstIdentity(22);
+		const stranger = localFirstIdentity(23);
+		const snapshot = createSnapshotEnvelope({
+			title: 'Presence room',
+			state: createDefaultState()
+		});
+		const first = await createLiveBuild(
+			creator.id,
+			{ title: 'Presence room', snapshot },
+			ORIGIN
+		);
+		const second = await createLiveBuild(
+			creator.id,
+			{ title: 'Another room', snapshot },
+			ORIGIN
+		);
+		const repository = new JazzLiveBuildRepository(creator.id);
+		const firstRow = await repository.findBuildBySlug(first.build.publicSlug);
+		const secondRow = await repository.findBuildBySlug(second.build.publicSlug);
+		expect(firstRow).not.toBeNull();
+		expect(secondRow).not.toBeNull();
+
+		const context = getLiveBuildJazzContext();
+		const visitorDb = await context.forRequest({
+			headers: { authorization: `Bearer ${visitor.token}` }
+		});
+		const strangerDb = await context.forRequest({
+			headers: { authorization: `Bearer ${stranger.token}` }
+		});
+		const presence = await visitorDb
+			.insert(app.liveBuildPresence, {
+				build_id: firstRow!.id,
+				generation: firstRow!.editGeneration,
+				user_id: visitor.id,
+				session_id: 'visitor-tab',
+				mode: 'view',
+				target: null,
+				visible: true,
+				lastSeenAt: new Date()
+			})
+			.wait({ tier: 'global' });
+
+		await expect(async () =>
+			visitorDb
+				.insert(app.liveBuildPresence, {
+					build_id: firstRow!.id,
+					generation: firstRow!.editGeneration,
+					user_id: stranger.id,
+					session_id: 'forged-owner',
+					mode: 'view',
+					target: null,
+					visible: true,
+					lastSeenAt: new Date()
+				})
+				.wait({ tier: 'global' })
+		).rejects.toThrow();
+		await expect(async () =>
+			visitorDb
+				.insert(app.liveBuildPresence, {
+					build_id: firstRow!.id,
+					generation: firstRow!.editGeneration + 1,
+					user_id: visitor.id,
+					session_id: 'future-generation',
+					mode: 'view',
+					target: null,
+					visible: true,
+					lastSeenAt: new Date()
+				})
+				.wait({ tier: 'global' })
+		).rejects.toThrow();
+		await expect(async () =>
+			strangerDb
+				.update(app.liveBuildPresence, presence.id, { target: 'stat:base:attack:flat' })
+				.wait({ tier: 'global' })
+		).rejects.toThrow();
+
+		await visitorDb
+			.update(app.liveBuildPresence, presence.id, {
+				visible: false,
+				lastSeenAt: new Date()
+			})
+			.wait({ tier: 'global' });
+		const publicRows = await strangerDb.all(
+			app.liveBuildPresence.where({ id: presence.id }),
+			{ tier: 'global' }
+		);
+		expect(publicRows).toHaveLength(1);
+
+		// Jazz 2 cannot compare OLD and NEW row columns in update permissions. A
+		// custom client can retarget only its own disposable UI row to another
+		// current room; doing so never grants authority over durable build data.
+		await visitorDb
+			.update(app.liveBuildPresence, presence.id, {
+				build_id: secondRow!.id,
+				generation: secondRow!.editGeneration,
+				mode: 'edit'
+			})
+			.wait({ tier: 'global' });
+		await expect(async () =>
+			visitorDb
+				.update(app.liveBuilds, secondRow!.id, { title: 'Forged edit' })
+				.wait({ tier: 'global' })
+		).rejects.toThrow();
+		await expect(
+			patchLiveBuild(second.build.publicSlug, visitor.id, {
+				baseRevision: second.build.revision,
+				changes: [{ path: '/title', before: second.build.title, after: 'Forged edit' }]
+			})
+		).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+
+		await visitorDb.delete(app.liveBuildPresence, presence.id).wait({ tier: 'global' });
+		await deleteLiveBuild(first.build.publicSlug, creator.id);
+		await deleteLiveBuild(second.build.publicSlug, creator.id);
+	}, 40_000);
+
 	it('recovers creator-owned builds without exposing editor access or internal fields', async () => {
 		const creator = actor(17);
 		const editor = actor(18);
@@ -134,6 +257,19 @@ describe('Jazz-backed live build lifecycle', () => {
 		expect(storedBuild).not.toBeNull();
 		expect(await repository.listEditors(storedBuild!.id)).toHaveLength(1);
 		expect(await repository.listCapabilities(storedBuild!.id)).toHaveLength(1);
+		const backendDb = getLiveBuildJazzContext().asBackend();
+		await backendDb
+			.insert(app.liveBuildPresence, {
+				build_id: storedBuild!.id,
+				generation: storedBuild!.editGeneration,
+				user_id: creator,
+				session_id: 'before-rotation',
+				mode: 'edit',
+				target: 'stat:base:attack:flat',
+				visible: true,
+				lastSeenAt: new Date()
+			})
+			.wait({ tier: 'global' });
 
 		const before = created.build.snapshot.state.stats.attack[0];
 		const patched = await patchLiveBuild(created.build.publicSlug, editor, {
@@ -156,6 +292,7 @@ describe('Jazz-backed live build lifecycle', () => {
 		const rotatedCapabilities = await repository.listCapabilities(storedBuild!.id);
 		expect(rotatedCapabilities).toHaveLength(1);
 		expect(rotatedCapabilities[0]).toMatchObject({ generation: 2, revoked: false });
+		expect(await repository.listPresence(storedBuild!.id)).toEqual([]);
 		await expect(
 			patchLiveBuild(created.build.publicSlug, editor, {
 				baseRevision: 2,
@@ -167,7 +304,20 @@ describe('Jazz-backed live build lifecycle', () => {
 		expect(pinned.pinned).toBe(true);
 		expect(pinned.expiresAt).toBeNull();
 
+		await backendDb
+			.insert(app.liveBuildPresence, {
+				build_id: storedBuild!.id,
+				generation: 2,
+				user_id: creator,
+				session_id: 'before-stop',
+				mode: 'edit',
+				target: null,
+				visible: false,
+				lastSeenAt: new Date()
+			})
+			.wait({ tier: 'global' });
 		await deleteLiveBuild(created.build.publicSlug, creator);
+		expect(await repository.listPresence(storedBuild!.id)).toEqual([]);
 		await expect(getLiveBuild(created.build.publicSlug, null)).rejects.toBeInstanceOf(LiveBuildError);
 	}, 40_000);
 
@@ -182,6 +332,42 @@ describe('Jazz-backed live build lifecycle', () => {
 			status: 404,
 			code: 'not_found'
 		});
+	}, 40_000);
+
+	it('uses system update time for presence retention instead of a client timestamp', async () => {
+		const creator = actor(24);
+		const now = new Date();
+		const snapshot = createSnapshotEnvelope({ title: 'Active room', state: createDefaultState() });
+		const created = await createLiveBuild(creator, { title: 'Active room', snapshot }, ORIGIN, now);
+		const repository = new JazzLiveBuildRepository(creator);
+		const build = await repository.findBuildBySlug(created.build.publicSlug);
+		expect(build).not.toBeNull();
+		const backendDb = getLiveBuildJazzContext().asBackend();
+		await backendDb
+			.insert(app.liveBuildPresence, {
+				build_id: build!.id,
+				generation: build!.editGeneration,
+				user_id: creator,
+				session_id: 'forged-future-heartbeat',
+				mode: 'edit',
+				target: null,
+				visible: true,
+				lastSeenAt: new Date('2100-01-01T00:00:00.000Z')
+			})
+			.wait({ tier: 'global' });
+
+		const recentResult = await cleanupExpiredLiveBuilds(now);
+		expect(recentResult.presenceDeleted).toBe(0);
+		expect(await repository.findBuildBySlug(created.build.publicSlug)).not.toBeNull();
+		expect(await repository.listPresence(build!.id)).toHaveLength(1);
+
+		const afterRetention = new Date(now.getTime() + 25 * 60 * 60 * 1000);
+		const staleResult = await cleanupExpiredLiveBuilds(afterRetention);
+		expect(staleResult.presenceDeleted).toBeGreaterThanOrEqual(1);
+		expect(await repository.findBuildBySlug(created.build.publicSlug)).not.toBeNull();
+		expect(await repository.listPresence(build!.id)).toEqual([]);
+
+		await deleteLiveBuild(created.build.publicSlug, creator);
 	}, 40_000);
 
 	it('expires an unpinned build relative to its last successful edit', async () => {

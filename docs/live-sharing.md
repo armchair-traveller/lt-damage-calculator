@@ -3,7 +3,8 @@
 Live sharing is accountless. A browser keeps a local-first Jazz identity and proves possession to
 the HTTP API with a 60-second bearer proof. Public build payloads are readable by link; edit
 capabilities and redeemed editor grants are private, and clients cannot mutate any Jazz table
-directly.
+containing durable build or capability data directly. The sole client-writable table contains
+best-effort collaborator presence for an already valid live-build generation.
 
 Device drafts remain in the calculator's own local library. The browser Jazz client is intentionally
 memory-backed: its persisted auth secret supplies the stable device identity, while live queries
@@ -33,9 +34,14 @@ permissions to the matching Jazz app before deploying application code:
 npm run jazz:validate
 npx --no-install jazz-tools deploy "$PUBLIC_JAZZ_APP_ID" \
   --schema-dir src/lib \
+  --migrations-dir src/lib/migrations \
   --server-url "$PUBLIC_JAZZ_SERVER_URL" \
   --admin-secret "$JAZZ_ADMIN_SECRET"
 ```
+
+Keep reviewed migration files and schema snapshots in `src/lib/migrations`. The SvelteKit Jazz dev
+runtime discovers that location automatically; CLI migration commands should pass
+`--migrations-dir src/lib/migrations` explicitly.
 
 `npm run dev` uses the official Jazz SvelteKit development plugin, which starts a local persistent
 Jazz server and publishes schema changes automatically.
@@ -88,10 +94,18 @@ or configure it in Vercel.
 - Vercel calls `/api/internal/cleanup-live-builds` daily with `CRON_SECRET`. Each invocation drains
   batches of up to 50 rows until no expired rows remain or its eight-second runtime budget is used.
   A failed row does not block later candidates; completion logs report `examined`, `deleted`, and
-  `failed`. Cleanup deletes capability/editor children before the build.
+  `failed` counts for builds and presence. Cleanup deletes capability/editor/presence children
+  before the build and independently removes presence rows whose system-managed Jazz update time
+  is older than 24 hours. A client-supplied heartbeat timestamp cannot extend that retention bound.
+- A visible live-build tab publishes one semantic presence row. It updates immediately when an
+  editor moves to another shared field and otherwise heartbeats every 20 seconds. The UI hides a
+  row after 45 seconds without a heartbeat. Presence never updates build content, revision,
+  `lastEditedAt`, or expiry.
 - Jazz v2 deletion is a tombstone in append-only history. Cleanup makes rows unavailable and keeps
   the active dataset bounded, but it does not promise immediate physical byte reclamation in Jazz
-  Cloud. Payloads are therefore gzip-compressed and capped at 32 KiB compressed / 64 KiB decoded.
+  Cloud. Presence therefore records only a canonical field/panel key—never pointer coordinates,
+  typed values, names, or edit secrets. Build payloads remain gzip-compressed and capped at 32 KiB
+  compressed / 64 KiB decoded.
 
 ## Security model
 
@@ -110,3 +124,8 @@ merge. The service uses a Jazz batch and a per-instance lock, but Jazz v2 alpha 
 distributed compare-and-swap primitive, so two simultaneous writes routed to different serverless
 instances can still race. Clients must treat the returned revision and subsequent subscription as
 authoritative.
+
+Presence rows are public, non-authoritative UI hints. Jazz permissions allow a local-first identity
+to insert or update only a row attributed to itself for a current live-build generation, and to
+delete only its own row. A custom client can misreport its own activity, but presence is never used
+to grant edit access, keep a build alive, or resolve content conflicts.

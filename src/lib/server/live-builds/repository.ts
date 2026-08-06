@@ -1,4 +1,10 @@
-import { app, type LiveBuildCapabilityRow, type LiveBuildEditorRow, type LiveBuildRow } from '$lib/schema';
+import {
+	app,
+	type LiveBuildCapabilityRow,
+	type LiveBuildEditorRow,
+	type LiveBuildPresenceRow,
+	type LiveBuildRow
+} from '$lib/schema';
 
 import { getLiveBuildDb } from './jazz-context';
 
@@ -95,6 +101,40 @@ export class JazzLiveBuildRepository {
 		);
 	}
 
+	async listPresence(buildId: string): Promise<LiveBuildPresenceRow[]> {
+		return this.db().all(app.liveBuildPresence.where({ build_id: buildId }), READ_OPTIONS);
+	}
+
+	async listPresenceForGeneration(
+		buildId: string,
+		generation: number
+	): Promise<LiveBuildPresenceRow[]> {
+		return this.db().all(
+			app.liveBuildPresence.where({ build_id: buildId, generation }),
+			READ_OPTIONS
+		);
+	}
+
+	async findStalePresence(
+		staleBefore: Date,
+		limit: number,
+		offset = 0
+	): Promise<LiveBuildPresenceRow[]> {
+		return this.db().all(
+			app.liveBuildPresence
+				.where({ $updatedAt: { lt: staleBefore } })
+				.orderBy('$updatedAt', 'asc')
+				.orderBy('id', 'asc')
+				.limit(limit)
+				.offset(offset),
+			READ_OPTIONS
+		);
+	}
+
+	async deletePresence(presenceId: string): Promise<void> {
+		await this.db().delete(app.liveBuildPresence, presenceId).wait(WRITE_OPTIONS);
+	}
+
 	async createBuild(input: InsertLiveBuild, secretHash: string): Promise<LiveBuildRow> {
 		const result = this.db().batch((batch) => {
 			const build = batch.insert(app.liveBuilds, input);
@@ -145,11 +185,13 @@ export class JazzLiveBuildRepository {
 		generation: number,
 		secretHash: string
 	): Promise<void> {
-		const [capabilities, editors] = await Promise.all([
+		const [capabilities, editors, presenceRows] = await Promise.all([
 			this.listCapabilities(build.id),
-			this.listEditors(build.id)
+			this.listEditors(build.id),
+			this.listPresence(build.id)
 		]);
 		const result = this.db().batch((batch) => {
+			for (const presence of presenceRows) batch.delete(app.liveBuildPresence, presence.id);
 			for (const editor of editors) batch.delete(app.liveBuildEditors, editor.id);
 			for (const capability of capabilities) {
 				batch.delete(app.liveBuildEditCapabilities, capability.id);
@@ -166,11 +208,13 @@ export class JazzLiveBuildRepository {
 	}
 
 	async deleteBuildAndChildren(build: LiveBuildRow): Promise<void> {
-		const [capabilities, editors] = await Promise.all([
+		const [capabilities, editors, presenceRows] = await Promise.all([
 			this.listCapabilities(build.id),
-			this.listEditors(build.id)
+			this.listEditors(build.id),
+			this.listPresence(build.id)
 		]);
 		const result = this.db().batch((batch) => {
+			for (const presence of presenceRows) batch.delete(app.liveBuildPresence, presence.id);
 			for (const editor of editors) batch.delete(app.liveBuildEditors, editor.id);
 			for (const capability of capabilities) {
 				batch.delete(app.liveBuildEditCapabilities, capability.id);

@@ -32,7 +32,19 @@ const schema = {
 			revoked: s.boolean(),
 			redeemedAt: s.timestamp()
 		})
-		.indexOnly(['build_id', 'user_id', 'generation', 'revoked'])
+		.indexOnly(['build_id', 'user_id', 'generation', 'revoked']),
+	liveBuildPresence: s
+		.table({
+			build_id: s.ref('liveBuilds'),
+			generation: s.int(),
+			user_id: s.string(),
+			session_id: s.string(),
+			mode: s.enum('view', 'edit'),
+			target: s.string().optional(),
+			visible: s.boolean(),
+			lastSeenAt: s.timestamp()
+		})
+		.indexOnly(['build_id', 'generation', 'user_id', 'session_id', 'lastSeenAt'])
 };
 
 export type AppSchema = s.Schema<typeof schema>;
@@ -41,3 +53,4 @@ export const app: s.App<AppSchema> = s.defineApp(schema);
 export type LiveBuildRow = s.RowOf<typeof app.liveBuilds>;
 export type LiveBuildCapabilityRow = s.RowOf<typeof app.liveBuildEditCapabilities>;
 export type LiveBuildEditorRow = s.RowOf<typeof app.liveBuildEditors>;
+export type LiveBuildPresenceRow = s.RowOf<typeof app.liveBuildPresence>;

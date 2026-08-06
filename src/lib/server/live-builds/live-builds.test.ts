@@ -6,7 +6,7 @@ import { createSnapshotEnvelope } from '$lib/calculator/snapshot-codec';
 import { buildLiveBuildChanges } from '$lib/live-builds/client';
 import { LIVE_BUILD_IDENTITY_AUDIENCE, type JsonValue } from '$lib/live-builds/contracts';
 import { permissions } from '$lib/permissions';
-import type { LiveBuildRow } from '$lib/schema';
+import type { LiveBuildPresenceRow, LiveBuildRow } from '$lib/schema';
 
 import { requireLiveBuildActor } from './auth';
 import { createEditSecret, editSecretMatches, hashEditSecret } from './crypto';
@@ -19,6 +19,7 @@ import {
 } from './json-patch';
 import { JazzLiveBuildRepository } from './repository';
 import {
+	LIVE_BUILD_PRESENCE_RETENTION_HOURS,
 	MAX_LIVE_BUILD_EDITORS_PER_GENERATION,
 	cleanupExpiredLiveBuilds,
 	listLiveBuilds,
@@ -38,6 +39,20 @@ function mutateEveryJsonLeaf(value: JsonValue): JsonValue {
 	return Object.fromEntries(
 		Object.entries(value).map(([key, child]) => [key, mutateEveryJsonLeaf(child)])
 	);
+}
+
+function presenceCandidate(index: number, lastSeenAt: Date): LiveBuildPresenceRow {
+	return {
+		id: `presence-${index}`,
+		build_id: `build-${index}`,
+		generation: 1,
+		user_id: `user-${index}`,
+		session_id: `session-${index}`,
+		mode: 'edit',
+		target: null,
+		visible: true,
+		lastSeenAt
+	};
 }
 
 function cleanupCandidate(index: number): LiveBuildRow {
@@ -344,13 +359,21 @@ describe('expired live build cleanup', () => {
 				if (build.id === rows[0].id) throw new Error('poison row');
 				deletedIds.add(build.id);
 			});
+		vi.spyOn(JazzLiveBuildRepository.prototype, 'findStalePresence').mockResolvedValue([]);
 
 		await expect(
 			cleanupExpiredLiveBuilds(new Date('2026-02-01T00:00:00.000Z'), 1, {
 				runtimeBudgetMs: 1_000,
 				clock: () => 0
 			})
-		).resolves.toEqual({ examined: 3, deleted: 2, failed: 1 });
+		).resolves.toEqual({
+			examined: 3,
+			deleted: 2,
+			failed: 1,
+			presenceExamined: 0,
+			presenceDeleted: 0,
+			presenceFailed: 0
+		});
 		expect(deleteBuild).toHaveBeenCalledTimes(3);
 	});
 
@@ -377,18 +400,72 @@ describe('expired live build cleanup', () => {
 				runtimeBudgetMs: 50,
 				clock: () => elapsed
 			})
-		).resolves.toEqual({ examined: 1, deleted: 1, failed: 0 });
+		).resolves.toEqual({
+			examined: 1,
+			deleted: 1,
+			failed: 0,
+			presenceExamined: 0,
+			presenceDeleted: 0,
+			presenceFailed: 0
+		});
 		expect(deletedIds).toEqual(new Set([rows[0].id]));
+	});
+
+	it('removes presence older than 24 hours and isolates a row deletion failure', async () => {
+		const now = new Date('2026-02-01T00:00:00.000Z');
+		const rows = [
+			presenceCandidate(1, new Date('2026-01-30T00:00:00.000Z')),
+			presenceCandidate(2, new Date('2026-01-30T01:00:00.000Z')),
+			presenceCandidate(3, new Date('2026-01-30T02:00:00.000Z'))
+		];
+		const deletedIds = new Set<string>();
+		vi.spyOn(JazzLiveBuildRepository.prototype, 'findExpiredBuilds').mockResolvedValue([]);
+		const findStale = vi
+			.spyOn(JazzLiveBuildRepository.prototype, 'findStalePresence')
+			.mockImplementation(async (_staleBefore, limit, offset = 0) =>
+				rows.filter((row) => !deletedIds.has(row.id)).slice(offset, offset + limit)
+			);
+		vi.spyOn(JazzLiveBuildRepository.prototype, 'deletePresence').mockImplementation(
+			async (presenceId) => {
+				if (presenceId === rows[0].id) throw new Error('poison presence row');
+				deletedIds.add(presenceId);
+			}
+		);
+
+		await expect(
+			cleanupExpiredLiveBuilds(now, 1, { runtimeBudgetMs: 1_000, clock: () => 0 })
+		).resolves.toEqual({
+			examined: 0,
+			deleted: 0,
+			failed: 0,
+			presenceExamined: 3,
+			presenceDeleted: 2,
+			presenceFailed: 1
+		});
+		expect(findStale).toHaveBeenCalledWith(
+			new Date(now.getTime() - LIVE_BUILD_PRESENCE_RETENTION_HOURS * 60 * 60 * 1000),
+			1,
+			expect.any(Number)
+		);
 	});
 });
 
 describe('Jazz live build permissions', () => {
-	it('allows public payload reads and denies every client mutation/private-table operation', () => {
+	it('allows public payload and presence reads while keeping durable build tables server-only', () => {
 		expect(permissions.liveBuilds.select?.using).toEqual({ type: 'True' });
 		expect(permissions.liveBuilds.insert?.with_check).toEqual({ type: 'False' });
 		expect(permissions.liveBuilds.update?.using).toEqual({ type: 'False' });
 		expect(permissions.liveBuilds.delete?.using).toEqual({ type: 'False' });
 		expect(permissions.liveBuildEditCapabilities.select?.using).toEqual({ type: 'False' });
 		expect(permissions.liveBuildEditors.select?.using).toEqual({ type: 'False' });
+		expect(permissions.liveBuildPresence.select?.using).toEqual({ type: 'True' });
+		expect(permissions.liveBuildPresence.insert?.with_check).toMatchObject({ type: 'And' });
+		expect(permissions.liveBuildPresence.update?.using).toMatchObject({ type: 'And' });
+		expect(permissions.liveBuildPresence.update?.with_check).toMatchObject({ type: 'And' });
+		expect(permissions.liveBuildPresence.delete?.using).toMatchObject({ type: 'And' });
+		expect(JSON.stringify(permissions.liveBuildPresence.insert)).toContain('$createdBy');
+		expect(JSON.stringify(permissions.liveBuildPresence.insert)).toContain('Exists');
+		expect(JSON.stringify(permissions.liveBuildPresence.update)).toContain('Exists');
+		expect(JSON.stringify(permissions.liveBuildPresence.delete)).not.toContain('Exists');
 	});
 });
