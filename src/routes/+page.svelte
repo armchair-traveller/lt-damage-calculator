@@ -7,7 +7,7 @@
 	import { onMount, tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { getDb } from 'jazz-tools/svelte';
+	import { JazzSvelteProvider } from 'jazz-tools/svelte';
 	import { RecoveryPhrase } from 'jazz-tools/passphrase';
 	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 	import AlertTriangleIcon from '@lucide/svelte/icons/triangle-alert';
@@ -266,7 +266,6 @@
 	let draftStatInputs = $state.raw<Record<string, string>>({});
 	let equivalenceValues = $state({ perc: 1, critical: 10 });
 	const visiblePrimaryVerdicts = new SvelteSet<Element>();
-	const db = getDb();
 	const jazzAuth = getJazzAuthContext();
 
 	const activeLocalBuild = $derived(getActiveLocalBuild(localLibrary));
@@ -728,6 +727,10 @@
 		return url.toString();
 	}
 
+	async function getJazzDb() {
+		return (await jazzAuth.getClient()).db;
+	}
+
 	function rememberRecoveredLiveBuild(build: LiveBuildResource) {
 		if (build.role !== 'creator') return;
 		recoveredLiveBuilds = [
@@ -747,6 +750,7 @@
 		recoveredLiveSharesStatus = 'loading';
 		recoveredLiveSharesError = null;
 		try {
+			const db = await getJazzDb();
 			const response = await listLiveBuilds(db);
 			recoveredLiveBuilds = response.builds;
 			recoveredLiveSharesStatus = 'ready';
@@ -811,6 +815,7 @@
 		sharingError = null;
 		liveSyncState = 'loading';
 		try {
+			const db = await getJazzDb();
 			const { build } = await fetchLiveBuild(slug, db);
 			if (generation !== locationGeneration || slug !== liveSlug) return;
 			liveBuild = build;
@@ -840,6 +845,7 @@
 		liveSyncState = navigator.onLine ? 'loading' : 'offline';
 		sharingError = null;
 		try {
+			const db = await getJazzDb();
 			const { build: remote } = await fetchLiveBuild(slug, db);
 			const active = getActiveLocalBuild(localLibrary);
 			if (
@@ -926,6 +932,7 @@
 		liveSyncState = 'syncing';
 		sharingError = null;
 		try {
+			const db = await getJazzDb();
 			const response = await redeemLiveBuildEdit(db, slug, requestedSecret);
 			if (generation !== locationGeneration || slug !== liveSlug) return;
 			const secret = requestedSecret;
@@ -996,6 +1003,7 @@
 		liveSyncState = 'syncing';
 		sharingError = null;
 		try {
+			const db = await getJazzDb();
 			const response = await createLiveBuild(db, {
 				title: localBuild.name,
 				snapshot: createSnapshotEnvelope({ title: localBuild.name, state: sharedState })
@@ -1077,6 +1085,7 @@
 		if (!navigator.onLine) return false;
 		sharingError = null;
 		try {
+			const db = await getJazzDb();
 			const { build } = await patchLiveBuild(db, slug, {
 				baseRevision,
 				changes
@@ -1155,6 +1164,7 @@
 		const slug = liveSlug;
 		const localBuildId = liveLocalBuildId;
 		try {
+			const db = await getJazzDb();
 			const { build } = await fetchLiveBuild(slug, db);
 			if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
 			if (workspaceMode === 'live-edit' && build.role === 'viewer') {
@@ -1240,6 +1250,7 @@
 		if (!liveSlug) return;
 		const generation = liveConnectionGeneration;
 		const slug = liveSlug;
+		const db = await getJazzDb();
 		const { build } = await setLiveBuildPinned(db, slug, pinned);
 		if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
 		liveBuild = build;
@@ -1255,6 +1266,7 @@
 		const slug = liveSlug;
 		const localBuildId = liveLocalBuildId;
 		try {
+			const db = await getJazzDb();
 			const response = await rotateLiveBuildEditLink(db, slug);
 			if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
 			// Invalidate any refresh or save that started while the rotation request was in flight.
@@ -1284,6 +1296,7 @@
 		const generation = liveConnectionGeneration;
 		const slug = liveSlug;
 		const localBuildId = liveLocalBuildId;
+		const db = await getJazzDb();
 		await stopLiveBuild(db, slug);
 		if (generation !== liveConnectionGeneration || slug !== liveSlug) return;
 		forgetRecoveredLiveBuild(slug);
@@ -1387,6 +1400,7 @@
 
 		let recoveredBuild: LiveBuildResource;
 		try {
+			const db = await getJazzDb();
 			const response = await fetchLiveBuild(publicSlug, db);
 			recoveredBuild = response.build;
 		} catch (error) {
@@ -1483,8 +1497,13 @@
 			recoveredLiveSharesStatus = 'error';
 			throw error;
 		}
-		recoveryPhrase = null;
-		sharingError = null;
+		window.location.reload();
+	}
+
+	function handleJazzRuntimeError(error: unknown) {
+		if (liveSlug) {
+			handleLiveError(error, 'The live connection could not start.');
+		}
 	}
 
 	async function retrySharing() {
@@ -2004,16 +2023,22 @@
 	{/if}
 </svelte:head>
 
-{#if liveSlug && jazzAuth.configured}
-	{#key liveSlug}
-		<LiveBuildSubscription
-			slug={liveSlug}
-			onRevision={handleLiveRevision}
-			onUnavailable={handleLiveUnavailable}
-			onError={(error) => handleLiveError(error, 'The live connection was interrupted.')}
-		/>
-	{/key}
-{/if}
+<svelte:boundary onerror={handleJazzRuntimeError}>
+	{#if jazzAuth.client}
+		<JazzSvelteProvider client={jazzAuth.client}>
+			{#if liveSlug && jazzAuth.configured}
+				{#key liveSlug}
+					<LiveBuildSubscription
+						slug={liveSlug}
+						onRevision={handleLiveRevision}
+						onUnavailable={handleLiveUnavailable}
+						onError={(error) => handleLiveError(error, 'The live connection was interrupted.')}
+					/>
+				{/key}
+			{/if}
+		</JazzSvelteProvider>
+	{/if}
+</svelte:boundary>
 
 <input
 	bind:this={backupInput}
