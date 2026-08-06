@@ -64,9 +64,14 @@ jobs:
         run: npm run jazz:validate
 
       - name: Check
+        env:
+          # Compile-time presence only; the Vercel build later pulls the real value.
+          OPENAI_API_KEY: ci-placeholder
         run: npm run check
 
       - name: Test
+        env:
+          OPENAI_API_KEY: ci-placeholder
         run: npm test
 
       - name: Install Vercel CLI
